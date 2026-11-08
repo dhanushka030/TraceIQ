@@ -1,0 +1,5 @@
+[
+  {"product":"apache","id":"CVE-2021-41773","cvss":7.5,"severity":"HIGH","description":"Path traversal vulnerability affecting certain Apache HTTP Server versions. Confirm the exact version and applicability against vendor guidance."},
+  {"product":"openssh","id":"CVE-2023-38408","cvss":9.8,"severity":"CRITICAL","description":"Potentially relevant OpenSSH agent forwarding vulnerability. Confirm affected configuration and version before treating as applicable."},
+  {"product":"nginx","id":"CVE-2021-23017","cvss":9.8,"severity":"CRITICAL","description":"DNS resolver vulnerability affecting certain NGINX versions. Verify the installed version and configuration."}
+]
