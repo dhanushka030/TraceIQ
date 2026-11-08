@@ -3,7 +3,21 @@ import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
-DATABASE_URL = os.environ.get("NETSENTRY_DB_URL") or f"sqlite:///{os.environ.get('NETSENTRY_DB') or BASE_DIR / 'netsentry.db'}"
+
+def _load_dotenv(path: Path) -> None:
+    """Minimal .env reader (KEY=VALUE, # comments). Real environment variables always win."""
+    try: lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError: return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line: continue
+        key, _, value = line.partition("=")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'": value = value[1:-1]
+        os.environ.setdefault(key.strip(), value)
+
+_load_dotenv(BASE_DIR / ".env")
+
 # Generated per process unless NETSENTRY_SECRET_KEY is set; the app keeps no login sessions.
 SECRET_KEY = os.environ.get("NETSENTRY_SECRET_KEY") or os.urandom(32).hex()
 SCAN_TIMEOUT = 180
@@ -11,6 +25,21 @@ SCAN_COOLDOWN_SECONDS = 10
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 NVD_TIMEOUT = 8
 CVE_CACHE_TTL_HOURS = 24
+
+# ---- Firebase / Firestore -------------------------------------------------
+FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "")
+FIREBASE_CLIENT_EMAIL = os.environ.get("FIREBASE_CLIENT_EMAIL", "")
+FIREBASE_PRIVATE_KEY = os.environ.get("FIREBASE_PRIVATE_KEY", "").replace("\\n", "\n")
+FIREBASE_SERVICE_ACCOUNT_PATH = os.environ.get("FIREBASE_SERVICE_ACCOUNT_PATH", "")
+FIRESTORE_COLLECTION_SCANS = os.environ.get("FIRESTORE_COLLECTION_SCANS") or "scans"
+FIRESTORE_COLLECTION_CVE_CACHE = os.environ.get("FIRESTORE_COLLECTION_CVE_CACHE") or "cve_cache"
+
+def firebase_configured() -> bool:
+    key_file = FIREBASE_SERVICE_ACCOUNT_PATH and Path(FIREBASE_SERVICE_ACCOUNT_PATH).is_file()
+    return bool(key_file or (FIREBASE_PROJECT_ID and FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY))
+
+# Firestore is the database. NETSENTRY_DB_BACKEND=memory is for automated tests only.
+DB_BACKEND = (os.environ.get("NETSENTRY_DB_BACKEND") or "firestore").lower()
 
 RISK_WEIGHTS = {
     "port": {

@@ -31,6 +31,12 @@ fi
 echo "[4/5] Running tests"
 python -m pytest -q
 
+if [ ! -f .env ]; then
+  cp .env.example .env
+  echo "[note] Created .env from .env.example. Paste your Firebase keys into .env, then run ./setup.sh again."
+  [ "${NO_RUN:-0}" = "1" ] && exit 0 || exit 2
+fi
+
 if [ "${NO_RUN:-0}" = "1" ]; then echo "[5/5] Skipped starting the app because NO_RUN=1."; exit 0; fi
 echo "[5/5] Starting NetSentry TraceIQ on http://127.0.0.1:5000  (Ctrl+C to stop)"
 echo "       Try the sample assessment at http://127.0.0.1:5000/?demo=1"

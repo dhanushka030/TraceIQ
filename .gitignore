@@ -4,3 +4,15 @@ __pycache__/
 .venv/
 netsentry.db
 *.py[cod]
+
+# Secrets: never commit these
+.env
+.env.*
+!.env.example
+serviceAccountKey.json
+*-firebase-adminsdk-*.json
+firebase-key*.json
+
+# Any Firebase/Google service-account key, whatever it is called
+*serviceAccount*.json*
+*.json.json

@@ -8,6 +8,21 @@ Enter a domain or IP you are allowed to test. TraceIQ looks up its public footpr
 
 > **Ethical use:** scan only systems you own or have explicit written permission to assess. The app allows loopback and private IP targets, `scanme.nmap.org`, and names listed in `allowed_targets.json`. Every scan needs a separate authorization tick. This is an educational tool: the score is a heuristic, CVE matches are keyword hints, and nothing here proves a system is exploitable.
 
+## Database: Firebase (Firestore)
+
+Scan history and the CVE cache are stored in Google **Cloud Firestore**.
+
+1. In the [Firebase console](https://console.firebase.google.com) open your project, go to **Build > Firestore Database** and click **Create database** (production mode is fine; the server uses the Admin SDK).
+2. Go to **Project settings > Service accounts > Generate new private key** and copy `project_id`, `client_email` and `private_key` into `.env` (see `.env.example`), or set `FIREBASE_SERVICE_ACCOUNT_PATH` to the downloaded JSON file.
+3. Run the app. It checks the connection at startup and stops with a clear message if Firebase is unreachable.
+
+Collections used: `scans` (one document per scan, ids 1, 2, 3 ...), `cve_cache`, and `meta` (the id counter). Names can be changed with `FIRESTORE_COLLECTION_SCANS` and `FIRESTORE_COLLECTION_CVE_CACHE`.
+
+- **Moving old data:** if you used the earlier SQLite version, run `python scripts/migrate_sqlite_to_firestore.py` once (add `--dry-run` to preview). It copies your scans, keeps their ids, and never modifies `netsentry.db`.
+- **Behind a VPN or TLS-inspecting proxy (for example Cloudflare WARP)?** On Windows the app builds its trust list from the Windows certificate store automatically, so Firebase connections work. To use your own bundle, set `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH`.
+- **Security:** `.env` and service-account keys are git-ignored. Never commit them. Rotate the private key in the Firebase console if it is ever exposed.
+- **Tests never touch Firebase:** they run against an in-memory store (`NETSENTRY_DB_BACKEND=memory`).
+
 ## One-command setup
 
 From a fresh clone, in the project folder:
@@ -17,7 +32,7 @@ From a fresh clone, in the project folder:
 | Windows | `setup.bat` |
 | Linux / macOS | `./setup.sh` (run `chmod +x setup.sh` first if needed) |
 
-The script creates `.venv`, installs `requirements.txt`, checks for Nmap and prints install instructions if it is missing, runs the tests, then starts the app. Set `NO_RUN=1` to stop after the tests. Python 3.11 or newer is required; Nmap is optional.
+The script creates `.venv`, installs `requirements.txt`, checks for Nmap and prints install instructions if it is missing, runs the tests, checks that `.env` has your Firebase keys (creating it from `.env.example` if not), then starts the app. Set `NO_RUN=1` to stop after the tests. Python 3.11 or newer is required; Nmap is optional.
 
 ## Run
 
@@ -41,6 +56,7 @@ Open <http://127.0.0.1:5000>. Set the `PORT` environment variable to use another
 
 ## Features
 
+- Firestore storage for scan history and the CVE cache
 - Target validation and allowlist, mandatory authorization, scan cooldown
 - WHOIS (with timeout), DNS records, SPF/DMARC, subdomains, reverse DNS, TLS certificate, HTTP security headers
 - CVE matching against NVD with one retry on rate limiting and an offline fallback (flagged on screen)

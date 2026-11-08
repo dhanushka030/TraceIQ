@@ -7,8 +7,8 @@ from types import SimpleNamespace
 from flask import Flask, jsonify, render_template, request, send_file, make_response
 from werkzeug.exceptions import HTTPException
 from flask_cors import CORS
-from config import DATABASE_URL, SECRET_KEY, SCAN_TIMEOUT, SCAN_COOLDOWN_SECONDS
-from models.db import db, Scan, cve_cache_adapter
+from config import SECRET_KEY, SCAN_TIMEOUT, SCAN_COOLDOWN_SECONDS
+from models.store import create_store
 from modules.validators import validate_target, resolve_addresses
 from modules.scanner import scan_target, nmap_available, nmap_status, scan_engine, NMAP_PATH, NMAP_AVAILABLE
 from modules.footprint import collect_footprint
@@ -20,15 +20,12 @@ from modules.report_generator import render_report, render_pdf
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("netsentry")
 app = Flask(__name__)
-app.config.update(SECRET_KEY=SECRET_KEY, SQLALCHEMY_DATABASE_URI=DATABASE_URL, SQLALCHEMY_TRACK_MODIFICATIONS=False, MAX_CONTENT_LENGTH=16_384)
+app.config.update(SECRET_KEY=SECRET_KEY, MAX_CONTENT_LENGTH=16_384)
 CORS(app, resources={r"/api/*": {"origins": ["http://127.0.0.1:*", "http://localhost:*"]}})
-db.init_app(app)
-with app.app_context():
-    db.create_all()
-    # A restart kills in-flight scan threads; don't leave their rows "running" forever.
-    for stale in Scan.query.filter(Scan.status.in_(("queued", "running"))).all():
-        stale.status, stale.progress, stale.error = "failed", "Interrupted", "The application restarted before this scan finished."
-    db.session.commit()
+store = create_store(app)
+log.info("Database backend: %s", store.backend)
+# A restart kills in-flight scan threads; don't leave their rows "running" forever.
+store.fail_stale()
 if NMAP_AVAILABLE: log.info("Nmap available at %s", NMAP_PATH)
 else: log.warning("Nmap not found on PATH (NMAP_AVAILABLE=False). Live scans use the built-in TCP scanner.")
 _lock = threading.Lock()
@@ -66,14 +63,13 @@ def build_demo(variant="current"):
 
 def seed_demo_scans():
     """Idempotently store two sample scans (profile "demo") so history, reports and compare work from a fresh database."""
-    existing = Scan.query.filter_by(profile="demo").order_by(Scan.created_at).all()
-    if len(existing) >= 2: return [s.id for s in existing[-2:]]
-    for s in existing: db.session.delete(s)
+    existing = store.scans_by_profile("demo")
+    if len(existing) >= 2: return [x.id for x in existing[-2:]]
+    for x in existing: store.delete_scan(x.id)
     now = datetime.now(timezone.utc); ids = []
     for variant, age in (("baseline", timedelta(days=7)), ("current", timedelta(minutes=1))):
-        scan = Scan(target="scanme.nmap.org", profile="demo", status="completed", progress="Complete", created_at=now - age, completed_at=now - age, result_json=build_demo(variant))
-        db.session.add(scan); db.session.flush(); ids.append(scan.id)
-    db.session.commit()
+        scan = store.create_scan("scanme.nmap.org", "demo", status="completed", progress="Complete", created_at=now - age, completed_at=now - age, result_json=build_demo(variant))
+        ids.append(scan.id)
     return ids
 
 def _json_error(message, status=400): return jsonify({"error": message}), status
@@ -84,7 +80,7 @@ def _scan_dict(scan):
 
 def _get_completed(scan_id):
     """Return (scan, None) or (None, error_response)."""
-    scan = db.session.get(Scan, scan_id)
+    scan = store.get_scan(scan_id)
     if not scan: return None, _json_error("Scan not found.", 404)
     if scan.status != "completed": return None, _json_error("Scan results are not ready.", 409)
     return scan, None
@@ -120,7 +116,7 @@ def unexpected_error(exc):
 def index(): return render_template("index.html", nmap_installed=nmap_available(), engine=scan_engine())
 
 @app.get("/api/health")
-def health(): return jsonify({"status": "ok", "engine": scan_engine(), "nmap": nmap_status(), "nmap_path": NMAP_PATH})
+def health(): return jsonify({"status": "ok", "engine": scan_engine(), "nmap": nmap_status(), "nmap_path": NMAP_PATH, "database": store.backend})
 
 @app.get("/api/demo")
 def demo(): return jsonify({"id": "demo", "target": "scanme.nmap.org", "status": "completed", "profile": "demo", "result": build_demo()})
@@ -148,19 +144,21 @@ def start_scan():
         now = time.monotonic()
         if now - _last_scan < SCAN_COOLDOWN_SECONDS: return _json_error("Please wait a few seconds before starting another scan.", 429)
         _last_scan = now
-    scan = Scan(target=target, profile=profile); db.session.add(scan); db.session.commit(); scan_id = scan.id
+    scan_id = store.create_scan(target, profile).id
     threading.Thread(target=_run_scan, args=(scan_id,), daemon=True, name=f"scan-{scan_id}").start()
     return jsonify({"id": scan_id, "status": "queued", "status_url": f"/api/scan/{scan_id}/status"}), 202
 
 def _run_scan(scan_id):
     with app.app_context():
-        scan = db.session.get(Scan, scan_id)
+        scan = store.get_scan(scan_id)
         if not scan: return
+        def step(progress):
+            scan.progress = progress; store.save_scan(scan)
         try:
-            scan.status, scan.progress = "running", "Collecting footprint"; db.session.commit()
+            scan.status = "running"; step("Collecting footprint")
             footprint = collect_footprint(scan.target)
             engine = scan_engine()
-            scan.progress = "Scanning ports with Nmap" if engine == "nmap" else "Scanning ports (built-in scanner)"; db.session.commit()
+            step("Scanning ports with Nmap" if engine == "nmap" else "Scanning ports (built-in scanner)")
             scan_host = scan.target
             try: ipaddress.ip_address(scan_host)
             except ValueError:
@@ -168,21 +166,20 @@ def _run_scan(scan_id):
                 if not resolved: raise RuntimeError("The target did not resolve to an address; no scan was run.")
                 scan_host = resolved[0]
             hosts = scan_target(scan_host, scan.profile, SCAN_TIMEOUT)
-            scan.progress = "Matching known vulnerabilities"; db.session.commit()
+            step("Matching known vulnerabilities")
             services = [p for h in hosts for p in h.get("ports", [])]
-            cves, cve_source = lookup_cves(services, cve_cache_adapter())
-            scan.progress = "Scoring exposure"; db.session.commit()
+            cves, cve_source = lookup_cves(services, store.cache_adapter())
+            step("Scoring exposure")
             scan.result_json = assemble_result(scan.target, hosts, footprint, cves, engine, cve_source)
-            scan.status, scan.progress, scan.completed_at = "completed", "Complete", datetime.now(timezone.utc); db.session.commit()
+            scan.status, scan.progress, scan.completed_at = "completed", "Complete", datetime.now(timezone.utc); store.save_scan(scan)
         except Exception as exc:
             log.exception("Scan %s failed", scan_id)
-            db.session.rollback()
-            scan = db.session.get(Scan, scan_id)
-            scan.status, scan.error, scan.progress, scan.completed_at = "failed", str(exc), "Failed", datetime.now(timezone.utc); db.session.commit()
+            scan.status, scan.error, scan.progress, scan.completed_at = "failed", str(exc), "Failed", datetime.now(timezone.utc)
+            store.save_scan(scan)
 
 @app.get("/api/scan/<int:scan_id>/status")
 def scan_status(scan_id):
-    scan = db.session.get(Scan, scan_id)
+    scan = store.get_scan(scan_id)
     return jsonify(_scan_dict(scan)) if scan else _json_error("Scan not found.", 404)
 
 @app.get("/api/scan/<int:scan_id>/results")
@@ -208,15 +205,15 @@ def scan_report(scan_id):
 
 @app.delete("/api/scan/<int:scan_id>")
 def delete_scan(scan_id):
-    scan = db.session.get(Scan, scan_id)
+    scan = store.get_scan(scan_id)
     if not scan: return _json_error("Scan not found.", 404)
     if scan.status in ("queued", "running"): return _json_error("A running scan cannot be deleted.", 409)
-    db.session.delete(scan); db.session.commit()
+    store.delete_scan(scan_id)
     return jsonify({"deleted": scan_id})
 
 @app.get("/api/history")
 def history():
-    scans = Scan.query.order_by(Scan.created_at.desc()).limit(200).all()
+    scans = store.list_scans(200)
     def extra(s):
         risk = (s.result_json or {}).get("risk", {})
         return {"score": risk.get("score"), "label": risk.get("label"), "engine": (s.result_json or {}).get("engine"), "open_ports": sum(len(h.get("ports", [])) for h in (s.result_json or {}).get("hosts", []))}
@@ -226,7 +223,7 @@ def history():
 def compare():
     try: a, b = int(request.args["a"]), int(request.args["b"])
     except (KeyError, ValueError): return _json_error("Provide numeric scan IDs a and b.")
-    first, second = db.session.get(Scan, a), db.session.get(Scan, b)
+    first, second = store.get_scan(a), store.get_scan(b)
     if not first or not second: return _json_error("Both scans must exist.", 404)
     if not first.result_json or not second.result_json: return _json_error("Both scans must be completed.", 409)
     def ports(s): return {(h.get("addresses", [s.target])[0], p["port"], p["protocol"], p.get("service")) for h in s.result_json.get("hosts", []) for p in h.get("ports", [])}

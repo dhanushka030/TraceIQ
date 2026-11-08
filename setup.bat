@@ -49,6 +49,12 @@ if errorlevel 1 (
   exit /b 1
 )
 
+if not exist ".env" (
+  copy /y ".env.example" ".env" >nul
+  echo [note] Created .env from .env.example. Paste your Firebase keys into .env, then run setup.bat again.
+  if "%NO_RUN%"=="1" (exit /b 0) else (exit /b 2)
+)
+
 if "%NO_RUN%"=="1" (
   echo [5/5] Skipped starting the app because NO_RUN=1.
   exit /b 0
