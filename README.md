@@ -8,7 +8,7 @@ Context-aware network reconnaissance and exposure mapping for an Ethical Hacking
 
 ### Windows
 
-1. Install Python 3.11 or later and Nmap from [nmap.org/download](https://nmap.org/download). Add Nmap's install folder to `PATH` and restart the terminal.
+1. Install Python 3.11 or later. Nmap is optional: install it from [nmap.org/download](https://nmap.org/download) and add it to `PATH` for deeper scans. Without it, TraceIQ uses its built-in TCP scanner.
 2. Open PowerShell in this folder and create a virtual environment:
 
 ```powershell
@@ -37,7 +37,7 @@ From this directory:
 python app.py
 ```
 
-Visit `http://127.0.0.1:5000`. If Nmap is unavailable, the app still launches and Demo Mode remains available. For an offline demo, click **Load sample scan**. A live scan requires ticking the authorization box. Private subnets can be scanned by IP; add an explicitly approved domain to `allowed_targets.json` to allow it.
+Visit `http://127.0.0.1:5000`. Without Nmap, live scans use the built-in TCP connect scanner (about 100 common ports, basic banner grabbing). For an offline demo, click **Load sample assessment** (or open `/?demo=1`). A live scan requires ticking the authorization box. Private subnets can be scanned by IP; add an explicitly approved domain to `allowed_targets.json` to allow it.
 
 ## API
 
@@ -47,9 +47,12 @@ Visit `http://127.0.0.1:5000`. If Nmap is unavailable, the app still launches an
 | GET | `/api/scan/<id>/status` | Poll progress |
 | GET | `/api/scan/<id>/results` | Read completed results |
 | GET | `/api/scan/<id>/graph` | Get vis-network nodes and edges |
-| GET | `/api/scan/<id>/report?format=pdf` | Download PDF, with HTML fallback; use `format=html` for HTML |
+| GET | `/api/scan/<id>/report?format=pdf` | Download PDF (WeasyPrint, then headless Edge/Chrome, then HTML); also `html` and `json` |
+| DELETE | `/api/scan/<id>` | Delete a finished scan |
+| GET | `/api/demo/report` | Sample report |
+| GET | `/api/health` | Engine status |
 | GET | `/api/history` | List up to 200 scans |
-| GET | `/api/compare?a=<id>&b=<id>` | Compare ports and risk score |
+| GET | `/api/compare?a=<id>&b=<id>` | Compare ports, findings and risk score |
 | GET | `/api/demo` | Read offline sample assessment |
 
 ## Architecture
@@ -61,6 +64,7 @@ flowchart LR
   API --> F[WHOIS DNS HTTP footprint]
   API --> N[Nmap XML scanner]
   F --> R[Risk engine]
+  API --> B[Built-in TCP scanner fallback]
   N --> C[NVD matcher and offline fallback]
   C --> R
   R --> G[vis-network graph]
@@ -75,9 +79,9 @@ flowchart LR
 3. If Nmap is installed and the course environment allows it, scan `127.0.0.1` or a deliberately prepared private lab VM after confirming authorization.
 4. Open scan history, compare two completed scans, and download a report.
 
-## Screenshot placeholder
+## Screenshot
 
-Add a screenshot of the dashboard here after running the application: `![TraceIQ dashboard](docs/screenshot.png)`.
+![TraceIQ dashboard with the sample assessment](docs/screenshot.png)
 
 ## Tests
 
@@ -85,7 +89,7 @@ Add a screenshot of the dashboard here after running the application: `![TraceIQ
 pytest -q
 ```
 
-Tests cover target normalization/scope, risky-port and header scoring, severity labels/capping, and Nmap XML parsing.
+45 tests cover target validation and scope, the API lifecycle (scan, results, history, compare, delete, reports), Nmap XML and built-in scanner parsing, CVE matching and caching, scoring, graph building and footprint collection.
 
 ## Known limitations
 
@@ -94,5 +98,6 @@ Tests cover target normalization/scope, risky-port and header scoring, severity 
 - WHOIS and DNS access depend on local network and resolver configuration. Data sources may return incomplete or stale records.
 - Nmap scripts and service detection can be intrusive; Deep mode is limited to approved targets and the top 1000 ports.
 - The score is a transparent educational heuristic, not a compliance rating or proof of exploitability.
-- PDF export depends on WeasyPrint and its native platform libraries. HTML download remains available if PDF conversion fails.
-- Client-side graph and chart libraries load from public CDNs; an internet connection is needed for these visualizations unless vendored locally.
+- PDF export tries WeasyPrint, then headless Edge/Chrome; HTML download remains available if both are missing.
+- The dashboard has no external assets: the charts and exposure map are plain SVG, and fonts are system fonts, so it works offline.
+- The built-in scanner is a TCP connect scan of common ports only; install Nmap for UDP-free full-range, version and script detection.

@@ -1,11 +1,175 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NetSentry TraceIQ</title><link rel="stylesheet" href="/static/css/app.css"><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script></head><body>
-<aside class="sidebar"><div class="brand"><span class="brand-icon">N</span><div><strong>NetSentry</strong><small>TRACEIQ</small></div></div><nav><a class="active" href="#scan">⌕ &nbsp; New Scan</a><a href="#results">◫ &nbsp; Dashboard</a><a href="#map">⌘ &nbsp; Exposure Map</a><a href="#history">◷ &nbsp; History & Compare</a></nav><div class="side-note">ETHICAL USE ONLY<br><span>Authorized targets only</span></div></aside>
-<main><header><div><div class="eyebrow">NETWORK INTELLIGENCE PLATFORM</div><h1>TraceIQ <span class="live-dot"></span></h1></div><div class="header-right"><span class="status-pill"><i></i> SYSTEM READY</span><span class="avatar">NS</span></div></header>
-<section class="hero"><div><div class="eyebrow">EXPOSURE MAPPING · RECONNAISSANCE</div><h2>Understand your network’s<br><em>attack surface.</em></h2><p>Discover services, map exposure, and prioritize remediation across authorized targets.</p></div><div class="hero-mark">◉</div></section>
-<section class="layout"><div class="card scan-card" id="scan"><div class="card-head"><div><span class="step">01</span><h3>Launch assessment</h3></div><span class="subtle">LIVE SCAN</span></div><label for="target">TARGET DOMAIN OR IP</label><div class="input-wrap"><span>⌕</span><input id="target" placeholder="e.g. 192.168.1.1 or scanme.nmap.org" autocomplete="off"><button id="clear" title="Clear">×</button></div><div class="row"><div class="field"><label for="profile">SCAN PROFILE</label><select id="profile"><option value="quick">Quick · Top 100 ports</option><option value="standard">Standard · Top 1000 + version</option><option value="deep">Deep · Version + scripts</option></select></div><div class="field"><label>SCOPE</label><div class="scope"><span class="scope-dot"></span> Allowlist enforced</div></div></div><label class="authorize"><input type="checkbox" id="authorized"><span class="checkmark"></span><span>I confirm I have authorization to scan this target.</span></label><button class="primary" id="start">Start authorized scan <span>→</span></button><div id="scan-message" class="message"></div><div class="guardrail">ⓘ &nbsp; Only localhost, private ranges, scanme.nmap.org, and targets in <code>allowed_targets.json</code> are permitted.</div><div class="nmap-state">NMAP ENGINE <span class="{{ 'ok' if nmap_installed else 'warn' }}">● {{ 'AVAILABLE' if nmap_installed else 'NOT INSTALLED · DEMO MODE AVAILABLE' }}</span></div></div>
-<div class="card demo-card"><div class="card-head"><div><span class="step blue">02</span><h3>Explore demo data</h3></div><span class="subtle">OFFLINE READY</span></div><p>Preview a sample assessment without running a live scan. Demo data is illustrative only.</p><button class="secondary" id="demo">Load sample scan <span>↗</span></button><div class="demo-stats"><div><strong>02</strong><small>OPEN SERVICES</small></div><div><strong>48<span>/100</span></strong><small>EXPOSURE SCORE</small></div><div><strong>01</strong><small>EXAMPLE CVE</small></div></div><div class="demo-tag">● &nbsp; SAMPLE DATA · NOT A LIVE SCAN</div></div></section>
-<section class="stats" id="results"><div class="stat"><div class="stat-label">HOSTS DISCOVERED <span>⌖</span></div><strong id="hosts-count">—</strong><small>Across scanned scope</small></div><div class="stat"><div class="stat-label">OPEN PORTS <span>↗</span></div><strong id="ports-count">—</strong><small>Services responding</small></div><div class="stat"><div class="stat-label">HIGH RISK FINDINGS <span>△</span></div><strong id="high-count">—</strong><small>Require review</small></div><div class="stat"><div class="stat-label">EXPOSURE SCORE <span>◉</span></div><strong id="score-count">—<small>/100</small></strong><small id="risk-label">Run a scan to assess</small></div></section>
-<section class="results-grid"><div class="card"><div class="card-head"><div><span class="step">03</span><h3>Findings</h3></div><div class="filters"><input id="search" placeholder="Search findings"><select id="severity-filter"><option value="">All severity</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option><option>Info</option></select></div></div><div class="table-wrap"><table><thead><tr><th>SEVERITY</th><th>FINDING</th><th>DETAIL</th></tr></thead><tbody id="findings"><tr><td colspan="3" class="empty">No assessment loaded. Start a scan or explore demo data.</td></tr></tbody></table></div></div><div class="card chart-card"><div class="card-head"><div><span class="step">04</span><h3>Service profile</h3></div></div><canvas id="ports-chart"></canvas><div class="chart-foot" id="chart-caption">Service distribution appears after a scan.</div></div></section>
-<section class="card map-card" id="map"><div class="card-head"><div><span class="step blue">05</span><h3>Exposure map</h3></div><span class="subtle">SELECT NODES FOR DETAILS</span></div><div id="network"></div><div id="node-details" class="chart-foot">Target → hosts → services → CVEs and DNS records</div></section>
-<section class="card history-card" id="history"><div class="card-head"><div><span class="step">06</span><h3>Scan history</h3></div><button class="secondary small" id="refresh-history">Refresh history</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>TARGET</th><th>PROFILE</th><th>STATUS</th><th>SCORE</th><th>COMPARE</th></tr></thead><tbody id="history-rows"><tr><td colspan="6" class="empty">No saved scans yet.</td></tr></tbody></table></div><div id="compare-result" class="chart-foot"></div></section>
-<footer>NETSENTRY TRACEIQ <span>Educational network security assessment · Use only with explicit authorization</span><button id="report-button" disabled>Download report ↓</button></footer></main><div id="toast" class="toast"></div><script src="/static/js/app.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>NetSentry TraceIQ</title>
+<link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="wrap topbar-row">
+    <a class="brand" href="#top" aria-label="NetSentry TraceIQ home">
+      <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="16" r="8" fill="none" stroke="currentColor" stroke-width="2" opacity=".55"/><circle cx="16" cy="16" r="3" fill="currentColor"/><path d="M16 16 26 9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <span>NetSentry <b>TraceIQ</b></span>
+    </a>
+    <nav aria-label="Sections" class="nav">
+      <a href="#scan">Scan</a><a href="#assessment">Assessment</a><a href="#map">Exposure map</a><a href="#history">History</a>
+    </nav>
+    <div class="topbar-tools">
+      <span class="engine" title="Port scanning engine"><i class="dot {{ 'ok' if nmap_installed else 'warn' }}"></i>{{ 'Nmap' if nmap_installed else 'Built-in scanner' }}</span>
+      <button class="icon-btn" id="theme" type="button" aria-label="Switch colour theme">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main" tabindex="-1">
+  <div id="top"></div>
+  <section class="wrap console" id="scan" aria-labelledby="scan-title">
+    <div class="console-copy">
+      <h1 id="scan-title">See what your network gives away.</h1>
+      <p>Enter a domain or IP address you are allowed to test. TraceIQ looks up its public footprint, checks which ports answer, matches known vulnerabilities, and explains every point of the exposure score.</p>
+    </div>
+
+    <form class="card scan-form" id="scan-form" novalidate>
+      <label for="target">Target domain or IP address</label>
+      <div class="input-row">
+        <input id="target" name="target" type="text" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="192.168.1.1 or scanme.nmap.org" aria-describedby="target-help scan-message">
+        <button class="btn ghost" id="clear" type="button" aria-label="Clear target" hidden>Clear</button>
+      </div>
+      <p class="help" id="target-help">Allowed: localhost, private IP ranges, scanme.nmap.org, and names listed in <code>allowed_targets.json</code>.</p>
+
+      <fieldset class="profiles">
+        <legend>Scan depth</legend>
+        <label class="choice"><input type="radio" name="profile" value="quick" checked><span><b>Quick</b><small>Most common ports</small></span></label>
+        <label class="choice"><input type="radio" name="profile" value="standard"><span><b>Standard</b><small>Wider range and service versions</small></span></label>
+        <label class="choice"><input type="radio" name="profile" value="deep"><span><b>Deep</b><small>Versions plus default scripts</small></span></label>
+      </fieldset>
+
+      <label class="check"><input type="checkbox" id="authorized"><span>I own this target or have written permission to scan it.</span></label>
+      <div class="actions">
+        <button class="btn primary" id="start" type="submit">Start scan</button>
+        <button class="btn" id="demo" type="button">Load sample assessment</button>
+      </div>
+      <p class="message" id="scan-message" role="status" aria-live="polite"></p>
+    </form>
+  </section>
+
+  <section class="wrap section" id="assessment" aria-labelledby="assessment-title" tabindex="-1">
+    <h2 id="assessment-title" class="visually-hidden">Assessment</h2>
+
+    <div class="state card" id="state-empty">
+      <svg width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="24" cy="24" r="20"/><circle cx="24" cy="24" r="11" opacity=".5"/><circle cx="24" cy="24" r="2.5" fill="currentColor"/></svg>
+      <div><h3>No assessment yet</h3><p>Start a scan above, open one from history, or load the sample assessment to explore the dashboard without touching a network.</p></div>
+    </div>
+
+    <div class="state card" id="state-loading" hidden role="status" aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div>
+      <div class="grow"><h3 id="loading-title">Scan running</h3><p id="loading-step">Starting</p>
+        <ol class="steps" id="steps"><li data-step="Collecting footprint">Footprint</li><li data-step="Scanning ports">Ports</li><li data-step="Matching known vulnerabilities">Vulnerabilities</li><li data-step="Scoring exposure">Score</li></ol>
+      </div>
+    </div>
+
+    <div class="state card error" id="state-error" hidden role="alert">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3 2 21h20L12 3z"/><path d="M12 10v5M12 18v.5"/></svg>
+      <div><h3>The scan did not finish</h3><p id="error-text"></p><p class="help">Check the target, then start the scan again. The sample assessment still works offline.</p></div>
+    </div>
+
+    <div id="content" hidden>
+      <div class="assess-head">
+        <div>
+          <p class="kicker" id="assess-kind"></p>
+          <h2 class="target" id="assess-target"></h2>
+          <p class="meta" id="assess-meta"></p>
+        </div>
+        <div class="downloads" role="group" aria-label="Download report">
+          <a class="btn primary" id="dl-pdf" href="#" download>PDF report</a>
+          <a class="btn" id="dl-html" href="#" download>HTML</a>
+          <a class="btn" id="dl-json" href="#" download>JSON</a>
+        </div>
+      </div>
+
+      <div class="grid summary">
+        <article class="card score-card" aria-labelledby="score-title">
+          <h3 id="score-title">Exposure score</h3>
+          <div class="gauge" id="gauge" role="img" aria-label="Exposure score"></div>
+          <p class="score-note" id="score-note"></p>
+          <h4>Where the points come from</h4>
+          <div class="bars" id="breakdown"></div>
+        </article>
+
+        <div class="grid-stack">
+          <div class="stats" id="stats"></div>
+          <article class="card" aria-labelledby="svc-title">
+            <div class="card-head"><h3 id="svc-title">Open services</h3><button class="btn small" id="svc-toggle" type="button" aria-pressed="false">Show as table</button></div>
+            <div id="services"></div>
+          </article>
+        </div>
+      </div>
+
+      <article class="card section-card" aria-labelledby="findings-title">
+        <div class="card-head wrap-head">
+          <h3 id="findings-title">Findings <span class="count" id="findings-count"></span></h3>
+          <div class="filters">
+            <div class="chips" role="group" aria-label="Filter by severity" id="chips"></div>
+            <label class="visually-hidden" for="search">Search findings</label>
+            <input id="search" type="search" placeholder="Search findings">
+          </div>
+        </div>
+        <div id="findings"></div>
+      </article>
+
+      <article class="card section-card" id="map" aria-labelledby="map-title">
+        <div class="card-head"><h3 id="map-title">Exposure map</h3><span class="help">Select a node to see what it is.</span></div>
+        <div class="map-wrap" role="group" aria-label="Exposure map of the target, hosts, services, vulnerabilities and DNS records">
+          <svg id="graph" viewBox="0 0 800 520"></svg>
+        </div>
+        <ul class="legend" id="legend" aria-label="Map legend"></ul>
+        <div class="node-detail" id="node-detail" role="status" aria-live="polite">Target in the centre; hosts, services, vulnerabilities and DNS records spread outward.</div>
+      </article>
+
+      <article class="card section-card" aria-labelledby="fp-title">
+        <div class="card-head"><h3 id="fp-title">Footprint</h3></div>
+        <div class="tabs" role="tablist" aria-label="Footprint sources" id="fp-tabs"></div>
+        <div id="fp-panel" role="tabpanel" tabindex="0"></div>
+      </article>
+    </div>
+  </section>
+
+  <section class="wrap section" id="history" aria-labelledby="history-title">
+    <div class="card section-card">
+      <div class="card-head wrap-head">
+        <h3 id="history-title">Scan history and comparison</h3>
+        <div class="actions">
+          <button class="btn small" id="compare-btn" type="button" disabled>Compare selected</button>
+          <button class="btn small ghost" id="refresh-history" type="button">Refresh</button>
+        </div>
+      </div>
+      <p class="help" id="compare-help">Tick two completed scans to see what changed between them.</p>
+      <div class="table-wrap">
+        <table>
+          <caption class="visually-hidden">Saved scans</caption>
+          <thead><tr><th scope="col"><span class="visually-hidden">Select</span></th><th scope="col">ID</th><th scope="col">Target</th><th scope="col">Depth</th><th scope="col">Status</th><th scope="col">Score</th><th scope="col">Started</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+          <tbody id="history-rows"><tr><td colspan="8" class="empty">Loading history</td></tr></tbody>
+        </table>
+      </div>
+      <div id="compare-result" role="region" aria-label="Comparison result" aria-live="polite"></div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-row">
+    <p><b>NetSentry TraceIQ</b> is an educational assessment tool. Scan only systems you own or have explicit permission to test.</p>
+    <p class="help">CVE matches are keyword hints, and the score is a transparent heuristic, not proof of exploitability.</p>
+  </div>
+</footer>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

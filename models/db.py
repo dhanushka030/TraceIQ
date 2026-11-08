@@ -1,8 +1,13 @@
 """SQLite persistence for scan history and cached CVE queries."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from flask_sqlalchemy import SQLAlchemy
+from config import CVE_CACHE_TTL_HOURS
 
 db = SQLAlchemy()
+
+def _utc(value):
+    """SQLite returns naive datetimes; treat them as UTC."""
+    return value if value is None or value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 class Scan(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -23,10 +28,12 @@ class CVECache(db.Model):
 def cve_cache_adapter():
     class Cache:
         def get(self, key):
-            row = CVECache.query.get(key)
-            return row.records if row else None
+            row = db.session.get(CVECache, key)
+            if not row: return None
+            if datetime.now(timezone.utc) - _utc(row.updated_at) > timedelta(hours=CVE_CACHE_TTL_HOURS): return None
+            return row.records
         def __setitem__(self, key, value):
-            row = CVECache.query.get(key)
+            row = db.session.get(CVECache, key)
             if row: row.records, row.updated_at = value, datetime.now(timezone.utc)
             else: db.session.add(CVECache(product=key, records=value))
             db.session.commit()

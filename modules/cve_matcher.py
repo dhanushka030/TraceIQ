@@ -5,27 +5,38 @@ from pathlib import Path
 import requests
 from config import NVD_API_URL, NVD_TIMEOUT
 
+FALLBACK_PATH = Path(__file__).resolve().parents[1] / "data" / "offline_cves.json"
+SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+
+def _load_fallback() -> list[dict]:
+    try: return json.loads(FALLBACK_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError): return []
+
 def match_cves(services: list[dict], cache=None) -> list[dict]:
-    results, seen = [], set()
-    fallback_path = Path(__file__).resolve().parents[1] / "data" / "offline_cves.json"
-    try: fallback = json.loads(fallback_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError): fallback = []
+    """Return CVE hints for detected product/version strings.
+
+    Live NVD answers are cached. Offline fallback answers are never cached, so a
+    short outage cannot hide live results for the cache lifetime.
+    """
+    results, seen, fallback = [], set(), _load_fallback()
     for service in services:
         product = " ".join(x for x in (service.get("product"), service.get("version")) if x).strip()
         if not product: continue
-        cached = cache.get(product) if cache else None
-        records = cached if cached is not None else None
+        records = cache.get(product) if cache else None
+        source = "cache"
         if records is None:
             try:
                 response = requests.get(NVD_API_URL, params={"keywordSearch": product, "resultsPerPage": 10}, timeout=NVD_TIMEOUT, headers={"User-Agent": "NetSentry-TraceIQ/1.0"})
-                response.raise_for_status(); records = _parse_nvd(response.json())
+                response.raise_for_status(); records = _parse_nvd(response.json()); source = "nvd"
+                if cache is not None: cache[product] = records
             except (requests.RequestException, ValueError, KeyError):
-                records = [c for c in fallback if product.lower().split()[0] in c.get("product", "").lower()]
-            if cache: cache[product] = records
+                token = product.lower().split()[0]
+                records = [c for c in fallback if token in c.get("product", "").lower()]; source = "offline"
         for record in records or []:
             if record.get("id") not in seen:
-                results.append({**record, "matched_product": product})
+                results.append({**record, "matched_product": product, "source": source})
                 seen.add(record.get("id"))
+    results.sort(key=lambda c: (SEVERITY_RANK.get(str(c.get("severity", "")).upper(), 9), -(c.get("cvss") or 0)))
     return results
 
 def _parse_nvd(payload: dict) -> list[dict]:

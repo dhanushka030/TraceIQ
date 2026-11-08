@@ -1,1 +1,74 @@
-<!doctype html><html><head><meta charset="utf-8"><title>NetSentry TraceIQ Assessment Report</title><style>body{font:14px Arial,sans-serif;color:#17212e;margin:40px}h1{color:#0d695e}h2{border-bottom:1px solid #ccd4dd;padding-bottom:6px;margin-top:30px}.meta{background:#f1f6f6;padding:14px}.risk{font-size:26px;font-weight:bold}.finding{padding:10px;border-left:4px solid #168878;background:#f7f9fa;margin:8px 0}.disclaimer{margin-top:32px;padding:14px;background:#fff5df;font-size:12px}table{border-collapse:collapse;width:100%}td,th{padding:8px;border:1px solid #cbd3dc;text-align:left}</style></head><body><h1>NetSentry TraceIQ</h1><h2>Network exposure assessment</h2><div class="meta"><b>Target:</b> {{ scan.target }}<br><b>Profile:</b> {{ scan.profile }}<br><b>Completed:</b> {{ scan.completed_at }}<br><b>Assessment ID:</b> {{ scan.id }}</div><h2>Executive summary</h2><p class="risk">{{ data.risk.label }} · {{ data.risk.score }}/100</p><p>Exposure score is a rule-based triage indicator. Review each observation and confirm applicability before remediation.</p><h2>Scope and methodology</h2><p>Authorized target {{ scan.target }} assessed with the {{ scan.profile }} Nmap profile, DNS and WHOIS lookups, HTTP header checks, and CVE keyword matching. The scan is limited to the application's configured ethical-use scope.</p><h2>Findings</h2>{% for f in data.risk.findings %}<div class="finding"><b>[{{ f.severity }}] {{ f.title }}</b><p>{{ f.detail }}</p><p><b>Recommendation:</b> {{ f.remediation }}</p></div>{% else %}<p>No configured exposure findings were generated.</p>{% endfor %}<h2>Discovered services</h2><table><thead><tr><th>Host</th><th>Port</th><th>Service</th><th>Product / Version</th></tr></thead><tbody>{% for host in data.hosts %}{% for p in host.ports %}<tr><td>{{ host.addresses|join(', ') }}</td><td>{{ p.port }}/{{ p.protocol }}</td><td>{{ p.service }}</td><td>{{ p.product }} {{ p.version }}</td></tr>{% endfor %}{% endfor %}</tbody></table><h2>CVE matches</h2><table><thead><tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Description</th></tr></thead><tbody>{% for c in data.cves %}<tr><td>{{ c.id }}</td><td>{{ c.severity }}</td><td>{{ c.cvss }}</td><td>{{ c.description }}</td></tr>{% else %}<tr><td colspan="4">No CVE matches returned.</td></tr>{% endfor %}</tbody></table><h2>Remediation priorities</h2><p>Confirm detected software and versions, review each CVE against vendor advisories, close unnecessary network exposure, enforce secure transport, and apply security headers where appropriate.</p><div class="disclaimer"><b>Ethical use disclaimer</b><br>{{ disclaimer }}</div></body></html>
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NetSentry TraceIQ assessment {{ scan.id }}</title>
+<style>
+:root{--text:#0f172a;--muted:#475569;--border:#cbd5e1;--surface:#f8fafc;--primary:#1d4ed8;--critical:#7f1d1d;--high:#b91c1c;--medium:#b45309;--low:#1d4ed8;--info:#475569;--warn-bg:#fff7e0}
+@page{size:A4;margin:18mm 16mm}
+*{box-sizing:border-box}
+body{font:12px/1.5 system-ui,"Segoe UI",Arial,sans-serif;color:var(--text);margin:0 auto;max-width:860px;padding:24px}
+h1{font-size:24px;margin:0}h2{font-size:16px;margin:28px 0 8px;padding-bottom:4px;border-bottom:1px solid var(--border);break-after:avoid}
+.sub{color:var(--muted);margin:2px 0 16px}
+.meta{display:grid;grid-template-columns:repeat(2,1fr);gap:4px 24px;background:var(--surface);border:1px solid var(--border);padding:12px 16px}
+.meta b{display:inline-block;min-width:96px;color:var(--muted);font-weight:600}
+.score{display:flex;align-items:baseline;gap:16px;margin:8px 0}
+.score strong{font-size:40px;line-height:1}.score span{font-size:18px;font-weight:700}
+.bar{display:flex;align-items:center;gap:8px;margin:2px 0}.bar i{display:block;height:8px;background:var(--primary);border-radius:2px;min-width:2px}.bar span{width:150px;color:var(--muted)}
+.finding{border-left:4px solid var(--info);background:var(--surface);padding:8px 12px;margin:8px 0;break-inside:avoid}
+.finding.critical{border-color:var(--critical)}.finding.high{border-color:var(--high)}.finding.medium{border-color:var(--medium)}.finding.low{border-color:var(--low)}
+.finding p{margin:2px 0}.tag{font-weight:700}
+table{border-collapse:collapse;width:100%;margin:6px 0}td,th{padding:6px 8px;border:1px solid var(--border);text-align:left;vertical-align:top}th{background:var(--surface)}
+.mono{font-family:ui-monospace,Consolas,monospace;font-size:11px}
+.disclaimer{margin-top:28px;padding:12px;background:var(--warn-bg);border:1px solid var(--border);font-size:11px}
+</style></head><body>
+{% set risk = data.risk or {} %}{% set fp = data.footprint or {} %}
+<h1>NetSentry TraceIQ</h1><p class="sub">Network exposure assessment{% if scan.profile == 'demo' %} &middot; <b>SAMPLE DATA, not a live scan</b>{% endif %}</p>
+<div class="meta">
+<div><b>Target</b> {{ scan.target }}</div><div><b>Assessment ID</b> {{ scan.id }}</div>
+<div><b>Profile</b> {{ scan.profile }}</div><div><b>Completed</b> {{ scan.completed_at.strftime('%Y-%m-%d %H:%M UTC') if scan.completed_at else 'n/a' }}</div>
+<div><b>Scan engine</b> {{ data.engine or 'n/a' }}</div><div><b>Open ports</b> {{ data.hosts|map(attribute='ports')|map('length')|sum }}</div>
+</div>
+
+<h2>Executive summary</h2>
+<div class="score"><strong>{{ risk.score }}</strong><span>/ 100 &middot; {{ risk.label }} exposure</span></div>
+<p>The score is a rule-based triage indicator, not proof of exploitability. Each point comes from a named finding below.</p>
+{% for name, pts in (risk.breakdown or {}).items() if pts %}<div class="bar"><span>{{ name }}</span><i style="width:{{ [pts * 4, 320]|min }}px"></i> {{ pts }}</div>{% endfor %}
+
+<h2>Scope and methodology</h2>
+<p>Authorized target <b>{{ scan.target }}</b> was assessed with the {{ scan.profile }} profile using {{ 'Nmap' if data.engine == 'nmap' else 'the built-in TCP connect scanner' if data.engine == 'builtin' else 'sample data' }}, DNS and WHOIS lookups (domains only), TLS certificate and HTTP header checks, and CVE keyword matching against NVD with an offline fallback. The scan was limited to the application's ethical-use scope.</p>
+
+<h2>Findings</h2>
+{% for f in risk.findings %}<div class="finding {{ f.severity|lower }}"><p><span class="tag">[{{ f.severity }}]</span> <b>{{ f.title }}</b>{% if f.points %} <span class="mono">(+{{ f.points }})</span>{% endif %}</p><p>{{ f.detail }}</p><p><b>Recommendation:</b> {{ f.remediation }}</p></div>
+{% else %}<p>No configured exposure findings were generated.</p>{% endfor %}
+
+<h2>Discovered services</h2>
+<table><thead><tr><th>Host</th><th>Port</th><th>Service</th><th>Product / version</th></tr></thead><tbody>
+{% for host in data.hosts %}{% for p in host.ports %}<tr><td class="mono">{{ host.addresses|join(', ') }}</td><td class="mono">{{ p.port }}/{{ p.protocol }}</td><td>{{ p.service }}</td><td>{{ p.product }} {{ p.version }}</td></tr>
+{% endfor %}{% else %}<tr><td colspan="4">No hosts reported.</td></tr>{% endfor %}
+</tbody></table>
+
+<h2>Footprint</h2>
+<table><tbody>
+{% if fp.notes %}<tr><th>Notes</th><td>{{ fp.notes|join(' ') }}</td></tr>{% endif %}
+{% for kind in ['A','AAAA','MX','NS','TXT'] if fp.dns and fp.dns.get(kind) %}<tr><th>DNS {{ kind }}</th><td class="mono">{{ fp.dns[kind]|join(', ') }}</td></tr>{% endfor %}
+{% if fp.whois %}<tr><th>WHOIS</th><td>{% for k, v in fp.whois.items() if v %}{{ k|replace('_',' ') }}: {{ v if v is string else v|join(', ') }}<br>{% endfor %}</td></tr>{% endif %}
+{% if fp.subdomains %}<tr><th>Subdomains</th><td class="mono">{% for s in fp.subdomains %}{{ s.name }} ({{ s.addresses|join(', ') }})<br>{% endfor %}</td></tr>{% endif %}
+{% if fp.tls and fp.tls.available %}<tr><th>TLS certificate</th><td>{{ 'Trusted' if fp.tls.trusted else 'Not trusted: ' ~ fp.tls.error }}{% if fp.tls.not_after %} &middot; expires {{ fp.tls.not_after }}{% endif %}</td></tr>{% endif %}
+{% if fp.http and fp.http.status %}<tr><th>HTTP</th><td>{{ fp.http.url }} &middot; status {{ fp.http.status }}</td></tr>{% endif %}
+</tbody></table>
+
+<h2>CVE matches</h2>
+<table><thead><tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Source</th><th>Description</th></tr></thead><tbody>
+{% for c in data.cves %}<tr><td class="mono">{{ c.id }}</td><td>{{ c.severity }}</td><td>{{ c.cvss }}</td><td>{{ c.source or 'n/a' }}</td><td>{{ c.description }}</td></tr>
+{% else %}<tr><td colspan="5">No CVE matches returned.</td></tr>{% endfor %}
+</tbody></table>
+<p>CVE matches are keyword-based triage hints. Confirm each against the vendor advisory before treating it as applicable.</p>
+
+<h2>Remediation priorities</h2>
+<ol>
+<li>Close or restrict every unnecessary exposed service, starting with those marked High.</li>
+<li>Confirm detected software versions, then patch anything a CVE match applies to.</li>
+<li>Enforce HTTPS with a valid certificate and add the missing security headers.</li>
+<li>Publish SPF and DMARC records for domains that send or could be spoofed in email.</li>
+</ol>
+<div class="disclaimer"><b>Ethical use disclaimer</b><br>{{ disclaimer }}</div>
+</body></html>
