@@ -34,6 +34,10 @@ def resolve_addresses(host: str) -> list[str]:
     except OSError:
         return []
 
+def preferred_address(addresses: list[str]) -> str:
+    """Pick the address to scan: IPv4 first (what Nmap expects by default), IPv6 only if nothing else."""
+    return next((a for a in addresses if ":" not in a), addresses[0])
+
 def is_allowed_target(target: str, allowlist_path: Path | None = None, resolver=resolve_addresses) -> bool:
     """Only permit loopback/private targets, scanme.nmap.org, or explicit entries."""
     path = allowlist_path or Path(__file__).resolve().parents[1] / "allowed_targets.json"

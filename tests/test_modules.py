@@ -152,3 +152,15 @@ def test_scan_runs_real_subprocess_through_fake_nmap(monkeypatch, tmp_path):
     assert hosts[0]["ports"][0]["product"] == "OpenSSH" and scanner.scan_engine() == "nmap"
     monkeypatch.setattr(scanner, "NMAP_AVAILABLE", False)
     assert scanner.scan_engine() == "builtin" and scanner.nmap_status().startswith("not_installed")
+
+def test_preferred_address_picks_ipv4_over_sorted_ipv6():
+    from modules.validators import preferred_address
+    assert preferred_address(sorted(["2600:3c01::f03c:91ff:fe18:bb2f", "45.33.32.156"])) == "45.33.32.156"
+    assert preferred_address(["2600:3c01::1"]) == "2600:3c01::1"
+
+def test_nmap_gets_dash_6_only_for_ipv6(monkeypatch):
+    seen = []
+    class R: returncode, stdout, stderr = 0, "<nmaprun></nmaprun>", ""
+    monkeypatch.setattr(scanner.subprocess, "run", lambda cmd, **k: seen.append(cmd) or R())
+    scanner._run_nmap("2600:3c01::1", "quick", 30); scanner._run_nmap("45.33.32.156", "quick", 30)
+    assert "-6" in seen[0] and "-6" not in seen[1]

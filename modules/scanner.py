@@ -4,8 +4,10 @@ Both engines return the same host/port/service records so the rest of the
 pipeline (CVE matching, scoring, graph, reports) does not care which one ran.
 """
 from __future__ import annotations
-import re, shutil, socket, subprocess, xml.etree.ElementTree as ET
+import logging, re, shutil, socket, subprocess, xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
+
+log = logging.getLogger("netsentry.scanner")
 
 PROFILES = {"quick": ("-F",), "standard": ("-sV", "--top-ports", "1000"), "deep": ("-sV", "-sC", "--top-ports", "1000")}
 
@@ -27,7 +29,18 @@ HTTP_PORTS = {80, 3000, 5000, 8000, 8008, 8080, 8081, 8082, 8180, 8888, 9000, 90
 TLS_PORTS = {443, 8443}
 
 # Resolved once at import so startup can log it and every scan takes the same, visible path.
-NMAP_PATH = shutil.which("nmap")
+def _find_nmap():
+    """PATH first, then the standard install folders (a fresh install is not on PATH in terminals opened before it)."""
+    found = shutil.which("nmap")
+    if found: return found
+    import os
+    for folder in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"), "/usr/local/bin", "/opt/homebrew/bin"):
+        for name in ("Nmap/nmap.exe", "nmap"):
+            candidate = os.path.join(folder, name) if folder else None
+            if candidate and os.path.isfile(candidate): return candidate
+    return None
+
+NMAP_PATH = _find_nmap()
 NMAP_AVAILABLE = NMAP_PATH is not None
 
 def nmap_available() -> bool:
@@ -59,11 +72,16 @@ def parse_nmap_xml(xml_text: str) -> list[dict]:
     return hosts
 
 def _run_nmap(target: str, profile: str, timeout: int) -> list[dict]:
-    command = [NMAP_PATH or "nmap", *PROFILES[profile], "-oX", "-", "--host-timeout", f"{min(timeout, 300)}s", target]
-    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout + 15, check=False)
+    ipv6 = ["-6"] if ":" in target else []  # Nmap rejects IPv6 targets without -6
+    command = [NMAP_PATH or "nmap", *ipv6, *PROFILES[profile], "-oX", "-", "--host-timeout", f"{min(timeout, 300)}s", target]
+    # stdin=DEVNULL: a server process has no console, and Nmap on Windows can exit early without a valid stdin.
+    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout + 15, check=False, stdin=subprocess.DEVNULL)
     if result.returncode not in (0, 1):
         raise RuntimeError(result.stderr.strip() or "Nmap scan failed.")
-    return parse_nmap_xml(result.stdout)
+    hosts = parse_nmap_xml(result.stdout)
+    if not hosts:
+        log.warning("Nmap reported no live hosts (exit code %s). stderr: %s | stdout tail: %s", result.returncode, result.stderr.strip()[:300], result.stdout.strip()[-300:])
+    return hosts
 
 # ------------------------------------------------------- built-in scanner
 

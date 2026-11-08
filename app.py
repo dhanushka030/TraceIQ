@@ -9,7 +9,7 @@ from werkzeug.exceptions import HTTPException
 from flask_cors import CORS
 from config import SECRET_KEY, SCAN_TIMEOUT, SCAN_COOLDOWN_SECONDS
 from models.store import create_store
-from modules.validators import validate_target, resolve_addresses
+from modules.validators import validate_target, resolve_addresses, preferred_address
 from modules.scanner import scan_target, nmap_available, nmap_status, scan_engine, NMAP_PATH, NMAP_AVAILABLE
 from modules.footprint import collect_footprint
 from modules.cve_matcher import match_cves, lookup_cves
@@ -164,7 +164,7 @@ def _run_scan(scan_id):
             except ValueError:
                 resolved = resolve_addresses(scan_host)
                 if not resolved: raise RuntimeError("The target did not resolve to an address; no scan was run.")
-                scan_host = resolved[0]
+                scan_host = preferred_address(resolved)
             hosts = scan_target(scan_host, scan.profile, SCAN_TIMEOUT)
             step("Matching known vulnerabilities")
             services = [p for h in hosts for p in h.get("ports", [])]
