@@ -50,6 +50,7 @@ table{border-collapse:collapse;width:100%;margin:6px 0}td,th{padding:6px 8px;bor
 <table><tbody>
 {% if fp.notes %}<tr><th>Notes</th><td>{{ fp.notes|join(' ') }}</td></tr>{% endif %}
 {% for kind in ['A','AAAA','MX','NS','TXT'] if fp.dns and fp.dns.get(kind) %}<tr><th>DNS {{ kind }}</th><td class="mono">{{ fp.dns[kind]|join(', ') }}</td></tr>{% endfor %}
+{% if fp.whois_error %}<tr><th>WHOIS</th><td>Unavailable: {{ fp.whois_error }}</td></tr>{% endif %}
 {% if fp.whois %}<tr><th>WHOIS</th><td>{% for k, v in fp.whois.items() if v %}{{ k|replace('_',' ') }}: {{ v if v is string else v|join(', ') }}<br>{% endfor %}</td></tr>{% endif %}
 {% if fp.subdomains %}<tr><th>Subdomains</th><td class="mono">{% for s in fp.subdomains %}{{ s.name }} ({{ s.addresses|join(', ') }})<br>{% endfor %}</td></tr>{% endif %}
 {% if fp.tls and fp.tls.available %}<tr><th>TLS certificate</th><td>{{ 'Trusted' if fp.tls.trusted else 'Not trusted: ' ~ fp.tls.error }}{% if fp.tls.not_after %} &middot; expires {{ fp.tls.not_after }}{% endif %}</td></tr>{% endif %}
@@ -61,6 +62,7 @@ table{border-collapse:collapse;width:100%;margin:6px 0}td,th{padding:6px 8px;bor
 {% for c in data.cves %}<tr><td class="mono">{{ c.id }}</td><td>{{ c.severity }}</td><td>{{ c.cvss }}</td><td>{{ c.source or 'n/a' }}</td><td>{{ c.description }}</td></tr>
 {% else %}<tr><td colspan="5">No CVE matches returned.</td></tr>{% endfor %}
 </tbody></table>
+{% if data.cve_source == 'offline_fallback' %}<p><b>Note:</b> the live NVD lookup was unavailable, so these matches come from the offline fallback list.</p>{% endif %}
 <p>CVE matches are keyword-based triage hints. Confirm each against the vendor advisory before treating it as applicable.</p>
 
 <h2>Remediation priorities</h2>

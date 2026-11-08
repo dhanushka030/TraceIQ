@@ -1,103 +1,97 @@
 # NetSentry TraceIQ
 
-Context-aware network reconnaissance and exposure mapping for an Ethical Hacking / Network Security college mini project. TraceIQ combines target validation, WHOIS and DNS footprinting, bounded Nmap profiles, explainable exposure scoring, optional NVD CVE matching, an interactive graph, SQLite scan history, comparison, and downloadable reports.
+Context-aware network reconnaissance and exposure mapping, built as an Ethical Hacking / Network Security mini project.
 
-> **Ethical use:** Scan only systems you own or have explicit permission to assess. The application permits loopback and private IP targets, `scanme.nmap.org`, and domains listed in `allowed_targets.json`. Every live scan requires a separate authorization confirmation.
+Enter a domain or IP you are allowed to test. TraceIQ looks up its public footprint (WHOIS, DNS, TLS certificate, subdomains, HTTP headers), scans for open ports with Nmap or its own built-in scanner, matches the detected software against known CVEs, and produces an exposure score where **every point is explained by a named finding**. Results appear on a dashboard with an exposure map, scan history and comparison, and downloadable reports.
 
-## Setup
+![TraceIQ dashboard with the sample assessment](docs/screenshot.png)
 
-### Windows
+> **Ethical use:** scan only systems you own or have explicit written permission to assess. The app allows loopback and private IP targets, `scanme.nmap.org`, and names listed in `allowed_targets.json`. Every scan needs a separate authorization tick. This is an educational tool: the score is a heuristic, CVE matches are keyword hints, and nothing here proves a system is exploitable.
 
-1. Install Python 3.11 or later. Nmap is optional: install it from [nmap.org/download](https://nmap.org/download) and add it to `PATH` for deeper scans. Without it, TraceIQ uses its built-in TCP scanner.
-2. Open PowerShell in this folder and create a virtual environment:
+## One-command setup
 
-```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
+From a fresh clone, in the project folder:
 
-### Linux
+| System | Command |
+|---|---|
+| Windows | `setup.bat` |
+| Linux / macOS | `./setup.sh` (run `chmod +x setup.sh` first if needed) |
 
-Install Python 3.11+, Nmap, and the platform libraries needed by WeasyPrint. For Debian/Ubuntu, `sudo apt install python3.11 python3.11-venv nmap libpango-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info`.
-
-```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
+The script creates `.venv`, installs `requirements.txt`, checks for Nmap and prints install instructions if it is missing, runs the tests, then starts the app. Set `NO_RUN=1` to stop after the tests. Python 3.11 or newer is required; Nmap is optional.
 
 ## Run
-
-From this directory:
 
 ```bash
 python app.py
 ```
 
-Visit `http://127.0.0.1:5000`. Without Nmap, live scans use the built-in TCP connect scanner (about 100 common ports, basic banner grabbing). For an offline demo, click **Load sample assessment** (or open `/?demo=1`). A live scan requires ticking the authorization box. Private subnets can be scanned by IP; add an explicitly approved domain to `allowed_targets.json` to allow it.
+Open <http://127.0.0.1:5000>. Set the `PORT` environment variable to use another port.
+
+- **Sample assessment (no network needed):** click **Load sample assessment**, or open <http://127.0.0.1:5000/?demo=1>. It stores two sample scans (an earlier baseline and a newer one) so the map, report downloads and **Compare** all work immediately. They are marked as sample data and can be deleted from history.
+- **Live scan:** enter a target, choose a depth, tick the authorization box and press **Start scan** (or `Ctrl+Enter`). Good lab targets are `127.0.0.1`, a private-network VM, or `scanme.nmap.org`.
+
+### Scan engines
+
+| Engine | When | Coverage |
+|---|---|---|
+| Nmap | Found on `PATH` at startup | Top 100 / top 1000 ports, service versions, default scripts |
+| Built-in TCP scanner | Nmap not installed | About 27 common ports (quick) or about 110 (standard / deep), with banner grabbing |
+
+`GET /api/health` reports which one is active. Install Nmap from <https://nmap.org/download> (Windows) or `sudo apt install nmap` / `brew install nmap`, then restart the app.
+
+## Features
+
+- Target validation and allowlist, mandatory authorization, scan cooldown
+- WHOIS (with timeout), DNS records, SPF/DMARC, subdomains, reverse DNS, TLS certificate, HTTP security headers
+- CVE matching against NVD with one retry on rate limiting and an offline fallback (flagged on screen)
+- Explainable score with a per-category breakdown and fix advice for every finding
+- Exposure map (plain SVG, keyboard accessible) with labels placed clear of lines
+- History with score trend sparklines, reopen, delete and two-scan comparison
+- Reports as PDF, HTML or JSON, plus a print-ready page and findings export to CSV
+- Copy any finding to the clipboard, tab title progress, and a risk-coloured favicon
+- Light and dark themes, keyboard shortcuts, works offline (no CDN assets)
+
+### Keyboard shortcuts
+
+| Key | Action |
+|---|---|
+| `Ctrl+Enter` | Start scan |
+| `Esc` | Close the help window, or dismiss messages |
+| `D` | Toggle dark mode |
+| `H` | Open the history panel |
+| `R` | Download the report |
+| `?` | Show shortcuts |
+
+Single-key shortcuts are disabled while typing in a field.
+
+## Tests
+
+```bash
+python -m pytest -q
+```
+
+The suite covers target validation, the full API lifecycle, the Nmap code path through a fake Nmap executable, the built-in scanner against a real local socket, NVD rate-limit and timeout handling, WHOIS failure, scoring, graph building and report generation. PDF export tries WeasyPrint, then headless Edge/Chrome, then falls back to HTML.
 
 ## API
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| POST | `/api/scan` | Start an authorized scan (`target`, `profile`, `authorized: true`) |
+| POST | `/api/scan` | Start a scan (`target`, `profile`, `authorized: true`) |
 | GET | `/api/scan/<id>/status` | Poll progress |
-| GET | `/api/scan/<id>/results` | Read completed results |
-| GET | `/api/scan/<id>/graph` | Get vis-network nodes and edges |
-| GET | `/api/scan/<id>/report?format=pdf` | Download PDF (WeasyPrint, then headless Edge/Chrome, then HTML); also `html` and `json` |
+| GET | `/api/scan/<id>/results` | Completed results |
+| GET | `/api/scan/<id>/graph` | Map nodes and edges |
+| GET | `/api/scan/<id>/report?format=pdf\|html\|json` | Download a report |
 | DELETE | `/api/scan/<id>` | Delete a finished scan |
-| GET | `/api/demo/report` | Sample report |
-| GET | `/api/health` | Engine status |
-| GET | `/api/history` | List up to 200 scans |
-| GET | `/api/compare?a=<id>&b=<id>` | Compare ports, findings and risk score |
-| GET | `/api/demo` | Read offline sample assessment |
-
-## Architecture
-
-```mermaid
-flowchart LR
-  UI[Dashboard HTML CSS JS] --> API[Flask API]
-  API --> V[Target validator and allowlist]
-  API --> F[WHOIS DNS HTTP footprint]
-  API --> N[Nmap XML scanner]
-  F --> R[Risk engine]
-  API --> B[Built-in TCP scanner fallback]
-  N --> C[NVD matcher and offline fallback]
-  C --> R
-  R --> G[vis-network graph]
-  API --> DB[(SQLite scans and CVE cache)]
-  API --> RP[Jinja report and optional PDF]
-```
-
-## Demo script
-
-1. Start the application and show the ethical-use disclaimer and target allowlist behavior.
-2. Load sample data to show the dashboard, score explanation, CVE example, and exposure graph without network access.
-3. If Nmap is installed and the course environment allows it, scan `127.0.0.1` or a deliberately prepared private lab VM after confirming authorization.
-4. Open scan history, compare two completed scans, and download a report.
-
-## Screenshot
-
-![TraceIQ dashboard with the sample assessment](docs/screenshot.png)
-
-## Tests
-
-```bash
-pytest -q
-```
-
-45 tests cover target validation and scope, the API lifecycle (scan, results, history, compare, delete, reports), Nmap XML and built-in scanner parsing, CVE matching and caching, scoring, graph building and footprint collection.
+| GET | `/api/history` | Up to 200 saved scans |
+| GET | `/api/compare?a=<id>&b=<id>` | Ports, findings and score change |
+| POST | `/api/demo/seed` | Create (once) the two sample scans |
+| GET | `/api/demo`, `/api/demo/report` | Sample data without touching the database |
+| GET | `/api/health` | Status and Nmap availability |
 
 ## Known limitations
 
-- CVE keyword matches are triage hints; product/version strings may not map exactly to NVD CPE configurations. Confirm with vendor advisories.
-- NVD availability and rate limits vary. SQLite cache and a small offline dataset provide limited fallback coverage.
-- WHOIS and DNS access depend on local network and resolver configuration. Data sources may return incomplete or stale records.
-- Nmap scripts and service detection can be intrusive; Deep mode is limited to approved targets and the top 1000 ports.
-- The score is a transparent educational heuristic, not a compliance rating or proof of exploitability.
-- PDF export tries WeasyPrint, then headless Edge/Chrome; HTML download remains available if both are missing.
-- The dashboard has no external assets: the charts and exposure map are plain SVG, and fonts are system fonts, so it works offline.
-- The built-in scanner is a TCP connect scan of common ports only; install Nmap for UDP-free full-range, version and script detection.
+- CVE matches are keyword based; product strings may not map exactly to NVD records. Confirm with vendor advisories.
+- NVD limits requests; the offline CVE list is small and is used only when the live lookup fails.
+- WHOIS and DNS depend on your resolver and network. They are skipped for IPs and private hosts.
+- The built-in scanner is a TCP connect scan of common ports. Install Nmap for broader, deeper scans.
+- The score is an educational heuristic, not a compliance rating.

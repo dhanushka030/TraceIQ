@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>NetSentry TraceIQ</title>
+<link rel="icon" id="favicon" type="image/svg+xml" href="/static/favicon.svg">
+<script src="/static/js/theme-init.js"></script>
 <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body>
@@ -91,6 +93,7 @@
           <a class="btn primary" id="dl-pdf" href="#" download>PDF report</a>
           <a class="btn" id="dl-html" href="#" download>HTML</a>
           <a class="btn" id="dl-json" href="#" download>JSON</a>
+          <button class="btn" id="print-btn" type="button">Print report</button>
         </div>
       </div>
 
@@ -119,9 +122,16 @@
             <div class="chips" role="group" aria-label="Filter by severity" id="chips"></div>
             <label class="visually-hidden" for="search">Search findings</label>
             <input id="search" type="search" placeholder="Search findings">
+            <button class="btn" id="export-csv" type="button" title="Download the findings shown here as a CSV file">Export CSV</button>
           </div>
         </div>
         <div id="findings"></div>
+      </article>
+
+      <article class="card section-card" id="cves-card" aria-labelledby="cves-title">
+        <div class="card-head"><h3 id="cves-title">Known vulnerabilities <span class="count" id="cves-count"></span></h3></div>
+        <p class="notice" id="cve-warning" hidden role="status"></p>
+        <div class="table-wrap" id="cves"></div>
       </article>
 
       <article class="card section-card" id="map" aria-labelledby="map-title">
@@ -137,6 +147,7 @@
         <div class="card-head"><h3 id="fp-title">Footprint</h3></div>
         <div class="tabs" role="tablist" aria-label="Footprint sources" id="fp-tabs"></div>
         <div id="fp-panel" role="tabpanel" tabindex="0"></div>
+        <div id="fp-print" class="fp-print"></div>
       </article>
     </div>
   </section>
@@ -144,7 +155,7 @@
   <section class="wrap section" id="history" aria-labelledby="history-title">
     <div class="card section-card">
       <div class="card-head wrap-head">
-        <h3 id="history-title">Scan history and comparison</h3>
+        <h3 id="history-title" tabindex="-1">Scan history and comparison</h3>
         <div class="actions">
           <button class="btn small" id="compare-btn" type="button" disabled>Compare selected</button>
           <button class="btn small ghost" id="refresh-history" type="button">Refresh</button>
@@ -154,8 +165,8 @@
       <div class="table-wrap">
         <table>
           <caption class="visually-hidden">Saved scans</caption>
-          <thead><tr><th scope="col"><span class="visually-hidden">Select</span></th><th scope="col">ID</th><th scope="col">Target</th><th scope="col">Depth</th><th scope="col">Status</th><th scope="col">Score</th><th scope="col">Started</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
-          <tbody id="history-rows"><tr><td colspan="8" class="empty">Loading history</td></tr></tbody>
+          <thead><tr><th scope="col"><span class="visually-hidden">Select</span></th><th scope="col">ID</th><th scope="col">Target</th><th scope="col">Depth</th><th scope="col">Status</th><th scope="col">Score</th><th scope="col">Trend</th><th scope="col">Started</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+          <tbody id="history-rows"><tr><td colspan="9" class="empty">Loading history</td></tr></tbody>
         </table>
       </div>
       <div id="compare-result" role="region" aria-label="Comparison result" aria-live="polite"></div>
@@ -169,6 +180,21 @@
     <p class="help">CVE matches are keyword hints, and the score is a transparent heuristic, not proof of exploitability.</p>
   </div>
 </footer>
+<button class="help-fab" id="help-btn" type="button" aria-label="Keyboard shortcuts" aria-haspopup="dialog">?</button>
+<div class="modal-backdrop" id="help-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="help-title" tabindex="-1">
+    <div class="card-head"><h3 id="help-title">Keyboard shortcuts</h3><button class="btn small" id="help-close" type="button">Close</button></div>
+    <dl class="shortcuts">
+      <div><dt><kbd>Ctrl</kbd> + <kbd>Enter</kbd></dt><dd>Start scan</dd></div>
+      <div><dt><kbd>Esc</kbd></dt><dd>Close this window, or dismiss messages</dd></div>
+      <div><dt><kbd>D</kbd></dt><dd>Toggle dark mode</dd></div>
+      <div><dt><kbd>H</kbd></dt><dd>Open the history panel</dd></div>
+      <div><dt><kbd>R</kbd></dt><dd>Download the report</dd></div>
+      <div><dt><kbd>?</kbd></dt><dd>Show this help</dd></div>
+    </dl>
+    <p class="help">Single-key shortcuts are off while you type in a field.</p>
+  </div>
+</div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script src="/static/js/app.js"></script>
 </body>

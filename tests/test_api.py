@@ -5,7 +5,7 @@ def _fake_scan(monkeypatch, ports=None):
     ports = ports if ports is not None else [{"port": 23, "protocol": "tcp", "state": "open", "service": "telnet", "product": "", "version": ""}]
     monkeypatch.setattr(netsentry, "collect_footprint", lambda t: {"dns": {}, "http": {"headers": {}, "security_headers": {}, "admin_paths": []}, "tls": {}})
     monkeypatch.setattr(netsentry, "scan_target", lambda host, profile, timeout: [{"addresses": [host], "hostnames": [], "ports": ports}])
-    monkeypatch.setattr(netsentry, "match_cves", lambda services, cache=None: [])
+    monkeypatch.setattr(netsentry, "lookup_cves", lambda services, cache=None: ([], "none"))
 
 def _run(client, target="127.0.0.1"):
     netsentry._last_scan = 0.0
@@ -84,3 +84,23 @@ def test_security_headers_and_health(client):
 def test_index_renders_without_external_assets(client):
     html = client.get("/").get_data(as_text=True)
     assert "cdn." not in html and "unpkg" not in html and "googleapis" not in html
+
+def test_health_reports_nmap_status_string(client):
+    health = client.get("/api/health").json
+    assert health["nmap"] == "available" or health["nmap"].startswith("not_installed")
+
+def test_demo_seed_is_idempotent_and_compare_shows_delta(client):
+    first = client.post("/api/demo/seed").json
+    assert client.post("/api/demo/seed").json == first
+    current = client.get(f"/api/scan/{first['current']}/results").json["result"]
+    assert sum(len(h["ports"]) for h in current["hosts"]) >= 5 and len(current["cves"]) >= 3 and current["graph"]["nodes"]
+    diff = client.get(f"/api/compare?a={first['baseline']}&b={first['current']}").json
+    assert diff["score_change"] > 0 and diff["new_ports"]
+    assert client.get(f"/api/scan/{first['current']}/report?format=html").status_code == 200
+    assert client.get(f"/api/scan/{first['current']}/report?format=pdf").status_code == 200
+
+def test_scan_result_records_cve_source(client, monkeypatch):
+    _fake_scan(monkeypatch)
+    monkeypatch.setattr(netsentry, "lookup_cves", lambda services, cache=None: ([], "offline_fallback"))
+    sid, _ = _run(client)
+    assert client.get(f"/api/scan/{sid}/results").json["result"]["cve_source"] == "offline_fallback"

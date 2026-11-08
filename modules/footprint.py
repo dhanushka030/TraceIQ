@@ -108,7 +108,8 @@ def collect_footprint(target: str) -> dict:
         try: data["dns"] = collect_dns(target)
         except Exception as exc: data["errors"].append(f"DNS lookup unavailable: {exc}")
         try: data["whois"] = _with_timeout(collect_whois, 10, target)
-        except Exception as exc: data["errors"].append(f"WHOIS lookup unavailable: {exc}")
+        except Exception as exc:  # any failure: the dashboard shows "WHOIS unavailable", the scan continues
+            data["whois"], data["whois_error"] = None, str(exc) or exc.__class__.__name__
         try: data["subdomains"] = find_subdomains(target)
         except Exception as exc: data["errors"].append(f"Subdomain lookup unavailable: {exc}")
     try:

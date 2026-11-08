@@ -6,7 +6,8 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = x => String(x ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const SEVERITIES = ['Critical', 'High', 'Medium', 'Low', 'Info'];
 const SEV_VAR = { critical: 'var(--sev-critical)', high: 'var(--sev-high)', medium: 'var(--sev-medium)', low: 'var(--sev-low)', info: 'var(--sev-info)' };
-const state = { result: null, filter: 'All', query: '', svcTable: false, fpTab: 'DNS', selected: [], busy: false };
+const state = { result: null, meta: null, shown: [], filter: 'All', query: '', svcTable: false, fpTab: 'DNS', selected: [], busy: false };
+const BASE_TITLE = 'NetSentry TraceIQ';
 
 /* ---------- helpers ---------- */
 async function api(url, opts) {
@@ -28,16 +29,35 @@ function show(which) {
   $('#content').hidden = which !== 'content';
 }
 
-/* ---------- theme ---------- */
+/* ---------- tab title and favicon badge ---------- */
 const root = document.documentElement;
+const favLink = $('#favicon'), FAV_DEFAULT = favLink.getAttribute('href');
+const setTitle = t => { document.title = t; };
+/* Draws a coloured dot for the risk label, using theme tokens so it matches the UI. */
+function setFavicon(label) {
+  const token = { critical: '--color-danger', high: '--chart-2', medium: '--chart-5', low: '--color-success' }[sevClass(label)];
+  try {
+    if (!label || !token) throw new Error('reset');
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = 32;
+    const g = canvas.getContext('2d'), css = getComputedStyle(root);
+    g.beginPath(); g.arc(16, 16, 13, 0, Math.PI * 2);
+    g.fillStyle = css.getPropertyValue(token).trim(); g.fill();
+    g.lineWidth = 3; g.strokeStyle = css.getPropertyValue('--color-surface').trim(); g.stroke();
+    favLink.type = 'image/png'; favLink.href = canvas.toDataURL('image/png');
+  } catch { favLink.type = 'image/svg+xml'; favLink.href = FAV_DEFAULT; }
+}
+
+/* ---------- theme ---------- */
 const effectiveTheme = () => root.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
 function syncThemeButton() { $('#theme').setAttribute('aria-label', `Switch to ${effectiveTheme() === 'dark' ? 'light' : 'dark'} theme`); }
 try { const saved = localStorage.getItem('theme'); if (saved) root.dataset.theme = saved; } catch { /* storage unavailable */ }
-$('#theme').addEventListener('click', () => {
+function toggleTheme() {
   root.dataset.theme = effectiveTheme() === 'dark' ? 'light' : 'dark';
   try { localStorage.setItem('theme', root.dataset.theme); } catch { /* ignore */ }
   syncThemeButton();
-});
+  if (state.result) setFavicon(state.result.risk && state.result.risk.label);  // dot colour follows the theme
+}
+$('#theme').addEventListener('click', toggleTheme);
 syncThemeButton();
 
 /* ---------- scan form ---------- */
@@ -55,6 +75,7 @@ $('#scan-form').addEventListener('submit', async e => {
   try {
     const started = await api('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target, profile: $('input[name="profile"]:checked').value, authorized: true }) });
     toast(`Scan #${started.id} started`);
+    setFavicon(null); setTitle(`[0%] Scanning — ${BASE_TITLE}`);
     show('loading'); $('#loading-title').textContent = `Scanning ${target}`; updateSteps('Queued');
     jump('#assessment');
     await poll(started.id, target);
@@ -66,12 +87,14 @@ $('#scan-form').addEventListener('submit', async e => {
 function setBusy(b) { state.busy = b; $('#start').disabled = b; $('#start').textContent = b ? 'Scanning' : 'Start scan'; }
 
 const STEP_ORDER = ['Collecting footprint', 'Scanning ports', 'Matching known vulnerabilities', 'Scoring exposure'];
+const STEP_PCT = [10, 40, 75, 90];  // progress is reported per stage, so the percentage is stage-based
 function updateSteps(progress) {
   $('#loading-step').textContent = `${progress}…`;
   const idx = STEP_ORDER.findIndex(s => progress.startsWith(s));
+  setTitle(`[${idx >= 0 ? STEP_PCT[idx] : 5}%] Scanning — ${BASE_TITLE}`);
   $$('#steps li').forEach((li, i) => { li.classList.toggle('done', idx > i || progress === 'Complete'); li.classList.toggle('active', i === idx); });
 }
-function showError(msg) { $('#error-text').textContent = msg; show('error'); }
+function showError(msg) { $('#error-text').textContent = msg; show('error'); setTitle(`[Error] ${BASE_TITLE}`); setFavicon(null); }
 
 async function poll(id, target) {
   for (let n = 0; n < 400; n++) {
@@ -90,8 +113,12 @@ async function poll(id, target) {
 
 $('#demo').addEventListener('click', async () => {
   try {
-    const d = await api('/api/demo');
-    render(d.result, { kind: 'Sample data', id: 'demo', target: d.target, profile: 'demo', when: null });
+    /* Stores two sample scans (an earlier baseline and a newer one) so history, reports and compare all work. */
+    const ids = await api('/api/demo/seed', { method: 'POST' });
+    const full = await api(`/api/scan/${ids.current}/results`);
+    state.selected = [ids.baseline, ids.current];
+    await loadHistory();
+    render(full.result, { kind: 'Sample data', id: ids.current, target: full.target, profile: 'demo', when: full.completed_at });
     setMessage('Showing offline sample data. This is not a live scan.', true);
   } catch (err) { showError(err.message); }
 });
@@ -108,12 +135,13 @@ function render(result, meta) {
   $('#assess-target').textContent = meta.target;
   const engineName = { nmap: 'Nmap', builtin: 'Built-in scanner', demo: 'Sample data' }[result.engine] || result.engine || 'Unknown engine';
   $('#assess-meta').textContent = [meta.profile && meta.profile !== 'demo' ? `${meta.profile} depth` : null, engineName, meta.when ? fmtDate(meta.when) : null].filter(Boolean).join(' · ');
-  const base = meta.id === 'demo' ? '/api/demo/report' : `/api/scan/${meta.id}/report`;
-  $('#dl-pdf').href = `${base}?format=pdf`; $('#dl-html').href = `${base}?format=html`;
-  const json = $('#dl-json'); json.hidden = meta.id === 'demo'; json.href = `${base}?format=json`;
+  const base = `/api/scan/${meta.id}/report`;
+  $('#dl-pdf').href = `${base}?format=pdf`; $('#dl-html').href = `${base}?format=html`; $('#dl-json').href = `${base}?format=json`;
 
+  setTitle(`[Done] ${meta.target} — ${BASE_TITLE}`); setFavicon(risk.label);
   drawGauge(risk);
   drawBreakdown(risk.breakdown || {});
+  drawCves(result);
   const strong = (risk.findings || []).filter(f => ['critical', 'high'].includes(sevClass(f.severity))).length;
   $('#stats').innerHTML = [[hosts.length, 'Hosts found'], [services.length, 'Open ports'], [strong, 'High or critical findings'], [(result.cves || []).length, 'CVE matches']]
     .map(([n, l]) => `<div class="stat"><b>${n}</b><span>${l}</span></div>`).join('');
@@ -123,6 +151,17 @@ function render(result, meta) {
   drawFootprint(result.footprint || {});
   jump('#assessment');
   $('#assessment').focus({ preventScroll: true });
+}
+
+/* ----- CVE table ----- */
+function drawCves(result) {
+  const cves = result.cves || [], warn = $('#cve-warning');
+  $('#cves-count').textContent = String(cves.length);
+  warn.hidden = result.cve_source !== 'offline_fallback';
+  warn.textContent = result.cve_source === 'offline_fallback' ? 'The live NVD lookup was unavailable, so these matches come from the offline fallback list. Treat them as hints and verify against vendor advisories.' : '';
+  $('#cves').innerHTML = cves.length
+    ? `<table><caption class="visually-hidden">CVE matches</caption><thead><tr><th scope="col">CVE</th><th scope="col">Severity</th><th scope="col">CVSS</th><th scope="col">Matched software</th><th scope="col">Source</th><th scope="col">Description</th></tr></thead><tbody>${cves.map(c => `<tr><td class="mono">${esc(c.id)}</td><td>${sevBadge(titleCase(c.severity || 'unknown'))}</td><td class="mono">${esc(c.cvss ?? 'n/a')}</td><td>${esc(c.matched_product || '')}</td><td>${esc(c.source || '')}</td><td class="cve-desc">${esc(c.description || '')}</td></tr>`).join('')}</tbody></table>`
+    : '<p class="list-empty">No CVE matches were returned for the detected software.</p>';
 }
 
 /* ----- gauge ----- */
@@ -160,18 +199,60 @@ $('#svc-toggle').addEventListener('click', () => {
 });
 
 /* ----- findings ----- */
+const titleCase = s => s ? s[0].toUpperCase() + s.slice(1).toLowerCase() : '';
+function filteredFindings() {
+  const all = (state.result.risk || {}).findings || [], q = state.query.toLowerCase();
+  return all.filter(f => (state.filter === 'All' || f.severity === state.filter) && (!q || `${f.title} ${f.detail} ${f.remediation} ${f.category}`.toLowerCase().includes(q)));
+}
 function drawFindings() {
   const all = (state.result.risk || {}).findings || [];
   const counts = Object.fromEntries(SEVERITIES.map(s => [s, all.filter(f => f.severity === s).length]));
   $('#chips').innerHTML = ['All', ...SEVERITIES.filter(s => counts[s])].map(s => `<button type="button" class="chip" data-sev="${s}" aria-pressed="${state.filter === s}">${s}${s === 'All' ? ` ${all.length}` : ` ${counts[s]}`}</button>`).join('');
-  const q = state.query.toLowerCase();
-  const list = all.filter(f => (state.filter === 'All' || f.severity === state.filter) && (!q || `${f.title} ${f.detail} ${f.remediation} ${f.category}`.toLowerCase().includes(q)));
+  const list = state.shown = filteredFindings();
   $('#findings-count').textContent = `${list.length} of ${all.length}`;
-  $('#findings').innerHTML = list.map(f => `<details class="finding"><summary>${sevBadge(f.severity)}<span class="ttl">${esc(f.title)}</span>${f.points ? `<span class="pts" title="Points added to the score">+${f.points}</span>` : ''}</summary><div class="body"><p>${esc(f.detail)}</p><p><b>What to do:</b> ${esc(f.remediation)}</p>${f.category ? `<p class="help">Category: ${esc(f.category)}</p>` : ''}</div></details>`).join('')
+  $('#export-csv').disabled = !list.length;
+  const copyIcon = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+  $('#findings').innerHTML = list.map((f, i) => `<details class="finding"><summary>${sevBadge(f.severity)}<span class="ttl">${esc(f.title)}</span>${f.points ? `<span class="pts" title="Points added to the score">+${f.points}</span>` : ''}</summary><button type="button" class="copy" data-copy="${i}" aria-label="Copy finding: ${esc(f.title)}">${copyIcon}<span class="tip" role="status"></span></button><div class="body"><p>${esc(f.detail)}</p><p><b>What to do:</b> ${esc(f.remediation)}</p>${f.category ? `<p class="help">Category: ${esc(f.category)}</p>` : ''}</div></details>`).join('')
     || `<p class="list-empty">${all.length ? 'No findings match this filter.' : 'No exposure findings were generated for this target.'}</p>`;
 }
 $('#chips').addEventListener('click', e => { const b = e.target.closest('.chip'); if (!b) return; state.filter = b.dataset.sev; drawFindings(); $(`.chip[data-sev="${state.filter}"]`)?.focus(); });
 $('#search').addEventListener('input', e => { state.query = e.target.value; drawFindings(); });
+
+/* Plain-text form of one finding, e.g. "Severity: HIGH | Port 23 (Telnet) | Finding: ... | Fix: ..." */
+function findingText(f) {
+  const port = f.port ? ` | Port ${f.port}${f.service ? ` (${titleCase(String(f.service).replace(/_/g, ' '))})` : ''}` : '';
+  return `Severity: ${String(f.severity).toUpperCase()}${port} | Finding: ${f.title} | Fix: ${f.remediation}`;
+}
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch { /* fall through to the legacy path */ }
+  const ta = document.createElement('textarea'); ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;opacity:0';
+  document.body.appendChild(ta); ta.select();
+  let ok = false; try { ok = document.execCommand('copy'); } catch { /* ignore */ }
+  ta.remove(); return ok;
+}
+$('#findings').addEventListener('click', async e => {
+  const btn = e.target.closest('.copy'); if (!btn) return;
+  const ok = await copyText(findingText(state.shown[Number(btn.dataset.copy)])), tip = $('.tip', btn);
+  tip.textContent = ok ? 'Copied!' : 'Copy failed'; tip.classList.add('show');
+  clearTimeout(btn._t); btn._t = setTimeout(() => { tip.classList.remove('show'); tip.textContent = ''; }, 1500);
+});
+
+/* CSV of the findings currently shown (respects filter and search); built client-side, no server call. */
+function csvCell(v) {
+  let t = String(v ?? '');
+  if (/^[=+\-@\t\r]/.test(t)) t = `'${t}`;  // stop spreadsheet formula injection
+  return /[",\r\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+}
+function exportCsv() {
+  const list = filteredFindings(); if (!list.length) { toast('No findings to export'); return; }
+  const rows = [['Severity', 'Port', 'Service', 'Finding', 'Recommendation'], ...list.map(f => [f.severity, f.port ?? '', f.service || '', f.title, f.remediation])];
+  const blob = new Blob(['\uFEFF' + rows.map(r => r.map(csvCell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a'), stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  a.href = URL.createObjectURL(blob); a.download = `netsentry_findings_${stamp}.csv`;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  toast(`Exported ${list.length} finding${list.length === 1 ? '' : 's'}`);
+}
+$('#export-csv').addEventListener('click', exportCsv);
 
 /* ----- exposure map (SVG) ----- */
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -218,16 +299,44 @@ function drawGraph(g) {
   const nodes = layoutGraph(g), by = Object.fromEntries(nodes.map(n => [n.id, n]));
   const dense = nodes.length > 26;
   const rings = [78, 150, 190, 228].map(r => `<circle class="ring" cx="400" cy="260" r="${r}"/>`).join('');
-  const edges = g.edges.map(e => { const a = by[e.from], b = by[e.to]; if (!a || !b) return ''; const hot = b.kind === 'cve' && ['critical', 'high'].includes(sevClass(b.severity)); return `<line class="edge${hot ? ' hot' : ''}" x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}"/>`; }).join('');
+  const edgePts = [];  // sampled points along every edge, so labels can be kept clear of lines
+  const edges = g.edges.map(e => {
+    const a = by[e.from], b = by[e.to]; if (!a || !b) return '';
+    const hot = b.kind === 'cve' && ['critical', 'high'].includes(sevClass(b.severity));
+    if (b.kind !== 'cve') {
+      for (let i = 0; i <= 24; i++) edgePts.push([a.x + (b.x - a.x) * i / 24, a.y + (b.y - a.y) * i / 24]);
+      return `<line class="edge" x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}"/>`;
+    }
+    /* CVE edges arc sideways (a clockwise curve, roundness 0.3) so they bend away from labels. */
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, k = 0.3, cx = mx - (b.y - a.y) * k, cy = my + (b.x - a.x) * k;
+    for (let i = 0; i <= 24; i++) { const t = i / 24, u = 1 - t; edgePts.push([u * u * a.x + 2 * u * t * cx + t * t * b.x, u * u * a.y + 2 * u * t * cy + t * t * b.y]); }
+    return `<path class="edge${hot ? ' hot' : ''}" fill="none" d="M${a.x.toFixed(1)} ${a.y.toFixed(1)}Q${cx.toFixed(1)} ${cy.toFixed(1)} ${b.x.toFixed(1)} ${b.y.toFixed(1)}"/>`;
+  }).join('');
+
+  /* Label placement: try 16 positions around each node and keep the one that touches the fewest edges, nodes and other labels. */
+  const placed = [], labels = {};
+  const order = ['target', 'host', 'cve', 'service', 'dns'];
+  [...nodes].sort((p, q) => order.indexOf(p.kind) - order.indexOf(q.kind)).forEach(n => {
+    if (dense && !['target', 'host', 'cve'].includes(n.kind)) return;
+    const text = n.label.length > 26 ? n.label.slice(0, 25) + '…' : n.label, w = text.length * 6.6 + 6;
+    const rad = n.kind === 'target' ? 30 : 20, pref = n.kind === 'target' ? Math.PI / 2 : (n.a ?? 0);
+    let best = null;
+    for (let i = 0; i < 16; i++) {
+      const th = pref + i * Math.PI / 8, dx = Math.cos(th), dy = Math.sin(th);
+      const lx = n.x + dx * rad, ly = n.y + dy * rad + 4, anchor = dx > 0.3 ? 'start' : dx < -0.3 ? 'end' : 'middle';
+      const x0 = anchor === 'start' ? lx : anchor === 'end' ? lx - w : lx - w / 2, box = [x0, ly - 11, x0 + w, ly + 3];
+      const inside = ([x, y]) => x > box[0] && x < box[2] && y > box[1] && y < box[3];
+      let cost = Math.min(i, 16 - i) * 0.05 + edgePts.filter(inside).length * 10;
+      cost += placed.filter(o => box[0] < o[2] && box[2] > o[0] && box[1] < o[3] && box[3] > o[1]).length * 10;
+      cost += nodes.filter(o => { if (o === n) return false; const px = Math.max(box[0], Math.min(o.x, box[2])), py = Math.max(box[1], Math.min(o.y, box[3])); return Math.hypot(px - o.x, py - o.y) < (o.kind === 'target' ? 24 : 16); }).length * 10;
+      if (box[0] < 4 || box[2] > 796 || box[1] < 4 || box[3] > 516) cost += 100;
+      if (!best || cost < best.cost) best = { cost, box, text, x: lx - n.x, y: ly - n.y, anchor };
+    }
+    placed.push(best.box); labels[n.id] = best;
+  });
   const nodeSvg = nodes.map(n => {
     const sev = sevClass(n.severity), extra = n.kind === 'service' && sev === 'high' ? ' risky' : '';
-    const showLabel = !dense || ['target', 'host', 'cve'].includes(n.kind);
-    let label = '';
-    if (showLabel) {
-      const rad = n.kind === 'target' ? 28 : 18, dx = n.kind === 'target' ? 0 : Math.cos(n.a), dy = n.kind === 'target' ? 1 : Math.sin(n.a);
-      const anchor = dx > 0.35 ? 'start' : dx < -0.35 ? 'end' : 'middle';
-      label = `<text x="${(dx * rad).toFixed(1)}" y="${(dy * rad + 4).toFixed(1)}" text-anchor="${anchor}">${esc(n.label.length > 26 ? n.label.slice(0, 25) + '…' : n.label)}</text>`;
-    }
+    const l = labels[n.id], label = l ? `<text x="${l.x.toFixed(1)}" y="${l.y.toFixed(1)}" text-anchor="${l.anchor}">${esc(l.text)}</text>` : '';
     const aria = `${KIND_LABEL[n.kind] || 'Node'}: ${n.label}${n.kind === 'cve' || n.kind === 'target' ? `, ${n.severity}` : ''}`;
     return `<g class="node k-${n.kind}${extra}" data-id="${esc(n.id)}" transform="translate(${n.x.toFixed(1)} ${n.y.toFixed(1)})" style="--s:${SEV_VAR[sev] || SEV_VAR.info}" tabindex="0" role="button" aria-label="${esc(aria)}"><title>${esc(aria)}</title>${shapeFor(n.kind)}${label}</g>`;
   }).join('');
@@ -246,7 +355,7 @@ function drawGraph(g) {
 function kv(rows) { rows = rows.filter(([, v]) => v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && !v.length)); return rows.length ? `<dl class="kv">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${Array.isArray(v) ? v.map(esc).join('<br>') : esc(v)}</dd>`).join('')}</dl>` : ''; }
 const FP_TABS = {
   DNS: fp => { const d = fp.dns || {}; const body = kv([...['A', 'AAAA', 'MX', 'NS', 'TXT', 'CNAME', 'SOA'].map(k => [k, d[k]]), ['SPF record', 'spf_present' in d ? (d.spf_present ? 'Present' : 'Missing') : null], ['DMARC policy', 'dmarc_present' in d ? (d.dmarc_present ? 'Present' : 'Missing') : null], ['Reverse DNS', (fp.reverse_dns || []).map(r => `${r.ip} → ${r.name}`)]]); return body || ''; },
-  WHOIS: fp => kv(Object.entries(fp.whois || {}).map(([k, v]) => [k.replace(/_/g, ' '), v])),
+  WHOIS: fp => fp.whois_error ? `<p class="list-empty">WHOIS unavailable<br><span class="help">${esc(fp.whois_error)}</span></p>` : kv(Object.entries(fp.whois || {}).map(([k, v]) => [k.replace(/_/g, ' '), v])),
   Certificate: fp => { const t = fp.tls || {}; return t.available ? kv([['Trust', t.trusted ? 'Trusted by this system' : 'Not trusted'], ['Problem', t.error], ['Subject', t.subject], ['Issuer', t.issuer], ['Expires', t.not_after], ['Days left', t.days_left]]) : ''; },
   Subdomains: fp => kv((fp.subdomains || []).map(s => [s.name, s.addresses])),
   Web: fp => { const h = fp.http || {}; return h.status ? kv([['URL', h.url], ['Status', h.status], ['HTTPS', h.https ? 'Yes' : 'No'], ...Object.entries(h.tech_hints || {}), ...Object.entries(h.security_headers || {}).map(([k, v]) => [k, v ? 'Present' : 'Missing']), ['Admin paths', (h.admin_paths || []).map(p => `${p.path} (HTTP ${p.status})`)]]) : ''; },
@@ -258,6 +367,7 @@ function drawFootprint(fp) {
   const panel = $('#fp-panel'); panel.setAttribute('aria-labelledby', `tab-${state.fpTab}`);
   const notes = [...(fp.notes || []), ...(fp.errors || [])].map(n => `<p class="note">${esc(n)}</p>`).join('');
   panel.innerHTML = notes + (FP_TABS[state.fpTab](fp) || `<p class="list-empty">${FP_EMPTY[state.fpTab]}</p>`);
+  $('#fp-print').innerHTML = notes + names.map(n => { const body = FP_TABS[n](fp); return body ? `<h4>${n}</h4>${body}` : ''; }).join('');
   $('#fp-tabs').onclick = e => { const b = e.target.closest('.tab'); if (b) { state.fpTab = b.dataset.tab; drawFootprint(fp); $(`#tab-${state.fpTab}`).focus(); } };
   $('#fp-tabs').onkeydown = e => { const i = names.indexOf(state.fpTab), d = { ArrowRight: 1, ArrowLeft: -1 }[e.key]; if (d) { e.preventDefault(); state.fpTab = names[(i + d + names.length) % names.length]; drawFootprint(fp); $(`#tab-${state.fpTab}`).focus(); } };
 }
@@ -268,12 +378,21 @@ async function loadHistory() {
   try {
     const items = await api('/api/history');
     state.selected = state.selected.filter(id => items.some(i => i.id === id && i.status === 'completed'));
+    const trend = {};  // target -> scores of its completed scans, oldest first
+    [...items].reverse().forEach(i => { if (i.status === 'completed' && i.score != null) (trend[i.target] ||= []).push(i.score); });
     rows.innerHTML = items.map(x => {
       const done = x.status === 'completed', checked = state.selected.includes(x.id);
-      return `<tr><td><input type="checkbox" class="pick" value="${x.id}" aria-label="Select scan ${x.id} for comparison" ${done ? '' : 'disabled'} ${checked ? 'checked' : ''}></td><td class="mono">#${x.id}</td><td class="mono">${esc(x.target)}</td><td>${esc(x.profile)}</td><td><span class="status ${esc(x.status)}">${esc(x.status)}</span></td><td>${done ? `${sevBadge(x.label)} <span class="mono">${x.score}</span>` : '<span class="help">n/a</span>'}</td><td>${esc(fmtDate(x.created_at))}</td><td><div class="row-actions"><button class="btn small" data-open="${x.id}" ${done ? '' : 'disabled'}>Open</button><button class="btn small ghost" data-del="${x.id}" aria-label="Delete scan ${x.id}" ${['queued', 'running'].includes(x.status) ? 'disabled' : ''}>Delete</button></div></td></tr>`;
-    }).join('') || '<tr><td colspan="8" class="empty">No saved scans yet. Completed scans appear here so you can reopen and compare them.</td></tr>';
+      return `<tr><td><input type="checkbox" class="pick" value="${x.id}" aria-label="Select scan ${x.id} for comparison" ${done ? '' : 'disabled'} ${checked ? 'checked' : ''}></td><td class="mono">#${x.id}</td><td class="mono">${esc(x.target)}</td><td>${esc(x.profile)}</td><td><span class="status ${esc(x.status)}">${esc(x.status)}</span></td><td>${done ? `${sevBadge(x.label)} <span class="mono">${x.score}</span>` : '<span class="help">n/a</span>'}</td><td>${sparkline((trend[x.target] || []).slice(-5))}</td><td>${esc(fmtDate(x.created_at))}</td><td><div class="row-actions"><button class="btn small" data-open="${x.id}" ${done ? '' : 'disabled'}>Open</button><button class="btn small ghost" data-del="${x.id}" aria-label="Delete scan ${x.id}" ${['queued', 'running'].includes(x.status) ? 'disabled' : ''}>Delete</button></div></td></tr>`;
+    }).join('') || '<tr><td colspan="9" class="empty">No saved scans yet. Completed scans appear here so you can reopen and compare them.</td></tr>';
     syncCompare();
-  } catch (err) { rows.innerHTML = `<tr><td colspan="8" class="empty">Could not load history: ${esc(err.message)}</td></tr>`; }
+  } catch (err) { rows.innerHTML = `<tr><td colspan="9" class="empty">Could not load history: ${esc(err.message)}</td></tr>`; }
+}
+/* Tiny inline-SVG trend line (80x32) on a fixed 0-100 scale; a dash when a target has fewer than two scores. */
+function sparkline(scores) {
+  if (scores.length < 2) return '<span class="help" aria-label="Not enough scans for a trend">–</span>';
+  const pts = scores.map((v, i) => [4 + i * (72 / (scores.length - 1)), 28 - Math.max(0, Math.min(100, v)) / 100 * 24]);
+  const last = pts[pts.length - 1];
+  return `<svg class="spark" width="80" height="32" viewBox="0 0 80 32" role="img" aria-label="Score trend over the last ${scores.length} scans: ${scores.join(', ')}"><polyline class="line" points="${pts.map(p => p.map(n => n.toFixed(1)).join(',')).join(' ')}"/><circle class="end" cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="3"/></svg>`;
 }
 function syncCompare() {
   $('#compare-btn').disabled = state.selected.length !== 2;
@@ -306,6 +425,50 @@ $('#compare-btn').addEventListener('click', async () => {
       <div><h4>New findings (${d.new_findings.length})</h4>${list(d.new_findings, f => `<li>${sevBadge(f.severity)} ${esc(f.title)}</li>`)}</div>
       <div><h4>Resolved findings (${d.resolved_findings.length})</h4>${list(d.resolved_findings, f => `<li>${sevBadge(f.severity)} ${esc(f.title)}</li>`)}</div></div>`;
   } catch (err) { out.innerHTML = `<p class="message">${esc(err.message)}</p>`; }
+});
+
+/* ---------- print ---------- */
+let reopen = [];
+function beforePrint() { reopen = $$('#findings details:not([open])'); reopen.forEach(d => { d.open = true; }); }
+function afterPrint() { reopen.forEach(d => { d.open = false; }); reopen = []; }
+addEventListener('beforeprint', beforePrint); addEventListener('afterprint', afterPrint);
+$('#print-btn').addEventListener('click', () => print());
+
+/* ---------- help modal and keyboard shortcuts ---------- */
+const modal = $('#help-modal'), dialog = $('.modal', modal);
+let lastFocus = null;
+const outside = () => $$('header.topbar, main, footer, .help-fab');
+const focusables = () => $$('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])', dialog).filter(el => !el.disabled && !el.hidden);
+function openHelp() { if (!modal.hidden) return; lastFocus = document.activeElement; modal.hidden = false; outside().forEach(el => { el.inert = true; }); $('#help-close').focus(); }
+function closeHelp() { if (modal.hidden) return; modal.hidden = true; outside().forEach(el => { el.inert = false; }); (lastFocus && lastFocus.focus ? lastFocus : $('#help-btn')).focus(); }
+$('#help-btn').addEventListener('click', openHelp);
+$('#help-close').addEventListener('click', closeHelp);
+modal.addEventListener('mousedown', e => { if (e.target === modal) closeHelp(); });
+
+function downloadReport() {
+  if ($('#content').hidden) { toast('Open an assessment first, then press R to download its report'); return; }
+  $('#dl-pdf').click();
+}
+document.addEventListener('keydown', e => {
+  if (!modal.hidden) {  // focus trap and Esc while the dialog is open
+    if (e.key === 'Escape') { e.preventDefault(); closeHelp(); }
+    else if (e.key === 'Tab') {
+      const f = focusables(); if (!f.length) { e.preventDefault(); return; }
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === dialog)) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+    return;
+  }
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('#scan-form').requestSubmit(); return; }
+  if (e.key === 'Escape') { setMessage(''); $('#toast').classList.remove('show'); return; }
+  const t = e.target, typing = t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable);
+  if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k === 'd') toggleTheme();
+  else if (k === 'h') { jump('#history'); $('#history-title').focus({ preventScroll: true }); }
+  else if (k === 'r') downloadReport();
+  else if (e.key === '?') { e.preventDefault(); openHelp(); }
 });
 
 /* ---------- boot ---------- */

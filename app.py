@@ -1,6 +1,6 @@
 """NetSentry TraceIQ Flask application."""
 from __future__ import annotations
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 import ipaddress, json, logging, threading, time
 from types import SimpleNamespace
@@ -10,9 +10,9 @@ from flask_cors import CORS
 from config import DATABASE_URL, SECRET_KEY, SCAN_TIMEOUT, SCAN_COOLDOWN_SECONDS
 from models.db import db, Scan, cve_cache_adapter
 from modules.validators import validate_target, resolve_addresses
-from modules.scanner import scan_target, nmap_available, scan_engine
+from modules.scanner import scan_target, nmap_available, nmap_status, scan_engine, NMAP_PATH, NMAP_AVAILABLE
 from modules.footprint import collect_footprint
-from modules.cve_matcher import match_cves
+from modules.cve_matcher import match_cves, lookup_cves
 from modules.risk_engine import score_exposure
 from modules.graph_builder import build_graph
 from modules.report_generator import render_report, render_pdf
@@ -29,32 +29,52 @@ with app.app_context():
     for stale in Scan.query.filter(Scan.status.in_(("queued", "running"))).all():
         stale.status, stale.progress, stale.error = "failed", "Interrupted", "The application restarted before this scan finished."
     db.session.commit()
+if NMAP_AVAILABLE: log.info("Nmap available at %s", NMAP_PATH)
+else: log.warning("Nmap not found on PATH (NMAP_AVAILABLE=False). Live scans use the built-in TCP scanner.")
 _lock = threading.Lock()
 _last_scan = 0.0
 
 # ----------------------------------------------------------------- helpers
 
-def assemble_result(target, hosts, footprint, cves, engine):
+def assemble_result(target, hosts, footprint, cves, engine, cve_source="none"):
     """Single place that turns raw scan data into the stored/rendered result."""
     risk = score_exposure(hosts, footprint, cves)
-    return {"target": target, "engine": engine, "hosts": hosts, "footprint": footprint, "cves": cves, "risk": risk, "graph": build_graph(target, hosts, footprint, cves, risk)}
+    return {"target": target, "engine": engine, "cve_source": cve_source, "hosts": hosts, "footprint": footprint, "cves": cves, "risk": risk, "graph": build_graph(target, hosts, footprint, cves, risk)}
 
-def build_demo():
-    """Illustrative sample data (never a live scan), run through the real scoring pipeline."""
-    hosts = [{"addresses": ["45.33.32.156"], "hostnames": ["scanme.nmap.org"], "ports": [
-        {"port": 22, "protocol": "tcp", "state": "open", "service": "ssh", "product": "OpenSSH", "version": "8.2p1"},
-        {"port": 80, "protocol": "tcp", "state": "open", "service": "http", "product": "Apache httpd", "version": "2.4.7"},
-        {"port": 9929, "protocol": "tcp", "state": "open", "service": "nping-echo", "product": "", "version": ""},
-        {"port": 31337, "protocol": "tcp", "state": "open", "service": "tcpwrapped", "product": "", "version": ""}]}]
+def build_demo(variant="current"):
+    """Illustrative sample data (never a live scan), run through the real scoring pipeline.
+
+    "current" is the newer sample; "baseline" is an earlier, less exposed state of the same
+    target so the compare view always has a real difference to show.
+    """
+    port = lambda n, svc, prod="", ver="": {"port": n, "protocol": "tcp", "state": "open", "service": svc, "product": prod, "version": ver}
+    ports = [port(22, "ssh", "OpenSSH", "8.2p1"), port(80, "http", "Apache httpd", "2.4.7"), port(9929, "nping-echo"), port(31337, "tcpwrapped")]
+    cves = [{"id": "CVE-2021-41773", "cvss": 7.5, "severity": "HIGH", "description": "Offline example match for demonstration only. Verify version applicability.", "matched_product": "Apache httpd 2.4.7", "source": "offline"}]
+    if variant == "current":
+        ports += [port(21, "ftp", "vsftpd", "2.3.4"), port(3306, "mysql", "MySQL", "5.5.62")]
+        cves += [{"id": "CVE-2023-38408", "cvss": 9.8, "severity": "CRITICAL", "description": "Offline example match for demonstration only. Verify OpenSSH agent forwarding applicability.", "matched_product": "OpenSSH 8.2p1", "source": "offline"},
+                 {"id": "CVE-2011-2523", "cvss": 9.8, "severity": "CRITICAL", "description": "Offline example match for demonstration only. Historic vsftpd 2.3.4 backdoor; verify the build.", "matched_product": "vsftpd 2.3.4", "source": "offline"}]
+    hosts = [{"addresses": ["45.33.32.156"], "hostnames": ["scanme.nmap.org"], "ports": ports}]
+    headers = {"strict-transport-security": False, "content-security-policy": False, "x-frame-options": True, "x-content-type-options": variant == "baseline"}
     footprint = {"target": "scanme.nmap.org", "dns": {"A": ["45.33.32.156"], "AAAA": [], "MX": [], "NS": ["ns1.linode.com.", "ns2.linode.com."], "TXT": [], "CNAME": [], "SOA": ["demo sample record"], "spf_present": False, "dmarc_present": False},
                  "whois": {"registrar": "Sample registrar (demo data)", "org": "Nmap Project (demo data)", "creation_date": "demo", "expiration_date": "demo", "country": "US", "name_servers": ["NS1.LINODE.COM", "NS2.LINODE.COM"]},
                  "reverse_dns": [{"ip": "45.33.32.156", "name": "scanme.nmap.org"}], "subdomains": [{"name": "www.scanme.nmap.org", "addresses": ["45.33.32.156"]}],
                  "tls": {"available": False, "trusted": None, "issuer": None, "subject": None, "not_after": None, "days_left": None, "error": "No TLS service reachable (demo data)"},
-                 "http": {"status": 200, "url": "http://scanme.nmap.org/", "https": False, "headers": {"Server": "Apache/2.4.7 (Ubuntu)"}, "tech_hints": {"Server": "Apache/2.4.7 (Ubuntu)"},
-                          "security_headers": {"strict-transport-security": False, "content-security-policy": False, "x-frame-options": True, "x-content-type-options": False}, "admin_paths": []},
+                 "http": {"status": 200, "url": "http://scanme.nmap.org/", "https": False, "headers": {"Server": "Apache/2.4.7 (Ubuntu)"}, "tech_hints": {"Server": "Apache/2.4.7 (Ubuntu)"}, "security_headers": headers, "admin_paths": []},
                  "errors": [], "notes": ["Demo data is illustrative and is not a current scan."]}
-    cves = [{"id": "CVE-2021-41773", "cvss": 7.5, "severity": "HIGH", "description": "Offline example match for demonstration only. Verify version applicability.", "matched_product": "Apache httpd 2.4.7", "source": "offline"}]
-    return assemble_result("scanme.nmap.org", hosts, footprint, cves, "demo")
+    return assemble_result("scanme.nmap.org", hosts, footprint, cves, "demo", "offline_fallback")
+
+def seed_demo_scans():
+    """Idempotently store two sample scans (profile "demo") so history, reports and compare work from a fresh database."""
+    existing = Scan.query.filter_by(profile="demo").order_by(Scan.created_at).all()
+    if len(existing) >= 2: return [s.id for s in existing[-2:]]
+    for s in existing: db.session.delete(s)
+    now = datetime.now(timezone.utc); ids = []
+    for variant, age in (("baseline", timedelta(days=7)), ("current", timedelta(minutes=1))):
+        scan = Scan(target="scanme.nmap.org", profile="demo", status="completed", progress="Complete", created_at=now - age, completed_at=now - age, result_json=build_demo(variant))
+        db.session.add(scan); db.session.flush(); ids.append(scan.id)
+    db.session.commit()
+    return ids
 
 def _json_error(message, status=400): return jsonify({"error": message}), status
 
@@ -100,10 +120,15 @@ def unexpected_error(exc):
 def index(): return render_template("index.html", nmap_installed=nmap_available(), engine=scan_engine())
 
 @app.get("/api/health")
-def health(): return jsonify({"status": "ok", "engine": scan_engine(), "nmap": nmap_available()})
+def health(): return jsonify({"status": "ok", "engine": scan_engine(), "nmap": nmap_status(), "nmap_path": NMAP_PATH})
 
 @app.get("/api/demo")
 def demo(): return jsonify({"id": "demo", "target": "scanme.nmap.org", "status": "completed", "profile": "demo", "result": build_demo()})
+
+@app.post("/api/demo/seed")
+def demo_seed():
+    ids = seed_demo_scans()
+    return jsonify({"baseline": ids[0], "current": ids[1]})
 
 @app.get("/api/demo/report")
 def demo_report():
@@ -145,9 +170,9 @@ def _run_scan(scan_id):
             hosts = scan_target(scan_host, scan.profile, SCAN_TIMEOUT)
             scan.progress = "Matching known vulnerabilities"; db.session.commit()
             services = [p for h in hosts for p in h.get("ports", [])]
-            cves = match_cves(services, cve_cache_adapter())
+            cves, cve_source = lookup_cves(services, cve_cache_adapter())
             scan.progress = "Scoring exposure"; db.session.commit()
-            scan.result_json = assemble_result(scan.target, hosts, footprint, cves, engine)
+            scan.result_json = assemble_result(scan.target, hosts, footprint, cves, engine, cve_source)
             scan.status, scan.progress, scan.completed_at = "completed", "Complete", datetime.now(timezone.utc); db.session.commit()
         except Exception as exc:
             log.exception("Scan %s failed", scan_id)
@@ -215,6 +240,5 @@ def compare():
                     "score_a": score_a, "score_b": score_b, "score_change": score_b - score_a})
 
 if __name__ == "__main__":
-    if not nmap_available(): log.warning("Nmap is not on PATH. Live scans use the built-in TCP scanner (fewer ports, basic banners).")
     import os
     app.run(host="127.0.0.1", port=int(os.environ.get("PORT", 5000)), debug=False, threaded=True)

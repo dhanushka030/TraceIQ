@@ -1,24 +1,36 @@
 """NVD 2.0 lookup with offline fallback and scan-cache support."""
 from __future__ import annotations
-import json
+import json, time
 from pathlib import Path
 import requests
 from config import NVD_API_URL, NVD_TIMEOUT
 
 FALLBACK_PATH = Path(__file__).resolve().parents[1] / "data" / "offline_cves.json"
+RATE_LIMIT_WAIT = 6  # seconds to wait after an NVD HTTP 429 before the single retry
 SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
 
 def _load_fallback() -> list[dict]:
     try: return json.loads(FALLBACK_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError): return []
 
-def match_cves(services: list[dict], cache=None) -> list[dict]:
-    """Return CVE hints for detected product/version strings.
+def _query_nvd(product: str) -> list[dict]:
+    """One NVD lookup. HTTP 429 waits and retries once; any other failure raises."""
+    for attempt in range(2):
+        response = requests.get(NVD_API_URL, params={"keywordSearch": product, "resultsPerPage": 10}, timeout=NVD_TIMEOUT, headers={"User-Agent": "NetSentry-TraceIQ/1.0"})
+        if getattr(response, "status_code", 200) == 429 and attempt == 0:
+            time.sleep(RATE_LIMIT_WAIT)
+            continue
+        response.raise_for_status()  # a second 429 lands here as HTTPError
+        return _parse_nvd(response.json())
+    return []
+
+def lookup_cves(services: list[dict], cache=None) -> tuple[list[dict], str]:
+    """Return (cves, cve_source). cve_source is nvd, cache, offline_fallback, mixed, or none.
 
     Live NVD answers are cached. Offline fallback answers are never cached, so a
     short outage cannot hide live results for the cache lifetime.
     """
-    results, seen, fallback = [], set(), _load_fallback()
+    results, seen, fallback, sources = [], set(), _load_fallback(), set()
     for service in services:
         product = " ".join(x for x in (service.get("product"), service.get("version")) if x).strip()
         if not product: continue
@@ -26,18 +38,22 @@ def match_cves(services: list[dict], cache=None) -> list[dict]:
         source = "cache"
         if records is None:
             try:
-                response = requests.get(NVD_API_URL, params={"keywordSearch": product, "resultsPerPage": 10}, timeout=NVD_TIMEOUT, headers={"User-Agent": "NetSentry-TraceIQ/1.0"})
-                response.raise_for_status(); records = _parse_nvd(response.json()); source = "nvd"
+                records = _query_nvd(product); source = "nvd"
                 if cache is not None: cache[product] = records
-            except (requests.RequestException, ValueError, KeyError):
+            except (requests.Timeout, requests.ConnectionError, requests.RequestException, ValueError, KeyError):
                 token = product.lower().split()[0]
-                records = [c for c in fallback if token in c.get("product", "").lower()]; source = "offline"
+                records = [c for c in fallback if token in c.get("product", "").lower()]; source = "offline_fallback"
+        sources.add(source)
         for record in records or []:
             if record.get("id") not in seen:
-                results.append({**record, "matched_product": product, "source": source})
+                results.append({**record, "matched_product": product, "source": "offline" if source == "offline_fallback" else source})
                 seen.add(record.get("id"))
     results.sort(key=lambda c: (SEVERITY_RANK.get(str(c.get("severity", "")).upper(), 9), -(c.get("cvss") or 0)))
-    return results
+    overall = "none" if not sources else next(iter(sources)) if len(sources) == 1 else "offline_fallback" if "offline_fallback" in sources else "mixed"
+    return results, overall
+
+def match_cves(services: list[dict], cache=None) -> list[dict]:
+    return lookup_cves(services, cache)[0]
 
 def _parse_nvd(payload: dict) -> list[dict]:
     output = []

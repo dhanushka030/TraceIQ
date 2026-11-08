@@ -48,8 +48,9 @@ def test_scan_target_uses_builtin_without_nmap(monkeypatch):
 
 # ---- CVE matcher
 class _Resp:
-    def __init__(self, payload): self.payload = payload
-    def raise_for_status(self): pass
+    def __init__(self, payload, status=200): self.payload, self.status_code = payload, status
+    def raise_for_status(self):
+        if self.status_code >= 400: raise requests.HTTPError(f"HTTP {self.status_code}")
     def json(self): return self.payload
 
 NVD = {"vulnerabilities": [{"cve": {"id": "CVE-1", "descriptions": [{"lang": "en", "value": "d"}], "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 9.8, "baseSeverity": "CRITICAL"}}]}}}]}
@@ -107,3 +108,47 @@ def test_collect_tls_reports_unreachable():
     s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
     info = footprint.collect_tls("127.0.0.1", port)
     assert info["available"] is False and info["error"]
+
+# ---- hardening: NVD 429 / timeouts, WHOIS failure, fake Nmap binary
+def test_nvd_429_waits_then_retries_once(monkeypatch):
+    calls, sleeps = [], []
+    def fake_get(*a, **k):
+        calls.append(1); return _Resp({}, 429) if len(calls) == 1 else _Resp(NVD)
+    monkeypatch.setattr(cve_matcher.requests, "get", fake_get)
+    monkeypatch.setattr(cve_matcher.time, "sleep", sleeps.append)
+    out, source = cve_matcher.lookup_cves([{"product": "Apache httpd", "version": "2.4.7"}], {})
+    assert len(calls) == 2 and sleeps == [cve_matcher.RATE_LIMIT_WAIT] and source == "nvd" and out[0]["id"] == "CVE-1"
+
+def test_nvd_persistent_429_falls_back_offline(monkeypatch):
+    monkeypatch.setattr(cve_matcher.requests, "get", lambda *a, **k: _Resp({}, 429))
+    monkeypatch.setattr(cve_matcher.time, "sleep", lambda s: None)
+    cache = {}
+    out, source = cve_matcher.lookup_cves([{"product": "Apache httpd", "version": "2.4.7"}], cache)
+    assert source == "offline_fallback" and out and out[0]["source"] == "offline" and cache == {}
+
+def test_nvd_timeout_falls_back_offline(monkeypatch):
+    def slow(*a, **k): raise requests.Timeout()
+    monkeypatch.setattr(cve_matcher.requests, "get", slow)
+    assert cve_matcher.lookup_cves([{"product": "OpenSSH", "version": "8.2p1"}])[1] == "offline_fallback"
+
+def test_whois_failure_is_reported_not_raised(monkeypatch):
+    def boom(t): raise RuntimeError("whois server refused")
+    for name, value in (("collect_dns", lambda t: {"spf_present": True, "dmarc_present": True}), ("collect_whois", boom), ("find_subdomains", lambda t: []), ("collect_tls", lambda h: {"available": False}), ("collect_http", lambda t: {"headers": {}, "security_headers": {}, "admin_paths": []})):
+        monkeypatch.setattr(footprint, name, value)
+    data = footprint.collect_footprint("example.org")
+    assert data["whois"] is None and "refused" in data["whois_error"] and data["dns"]["spf_present"]
+
+def test_scan_runs_real_subprocess_through_fake_nmap(monkeypatch, tmp_path):
+    import os, sys
+    xml = '<nmaprun><host><address addr="127.0.0.1"/><ports><port protocol="tcp" portid="22"><state state="open"/><service name="ssh" product="OpenSSH" version="9.0"/></port></ports></host></nmaprun>'
+    script = tmp_path / "fake_nmap.py"
+    script.write_text("import sys\nassert '-oX' in sys.argv\nprint(" + repr(xml) + ")\n")
+    launcher = tmp_path / ("nmap.bat" if os.name == "nt" else "nmap")
+    if os.name == "nt": launcher.write_text(f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n')
+    else: launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n')
+    launcher.chmod(0o755)
+    monkeypatch.setattr(scanner, "NMAP_PATH", str(launcher)); monkeypatch.setattr(scanner, "NMAP_AVAILABLE", True)
+    hosts = scanner.scan_target("127.0.0.1", "standard", 30)
+    assert hosts[0]["ports"][0]["product"] == "OpenSSH" and scanner.scan_engine() == "nmap"
+    monkeypatch.setattr(scanner, "NMAP_AVAILABLE", False)
+    assert scanner.scan_engine() == "builtin" and scanner.nmap_status().startswith("not_installed")

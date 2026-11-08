@@ -26,8 +26,15 @@ FULL_PORTS = tuple(sorted(set(SERVICE_NAMES) | set(QUICK_PORTS) | {5001, 5002, 7
 HTTP_PORTS = {80, 3000, 5000, 8000, 8008, 8080, 8081, 8082, 8180, 8888, 9000, 9090, 9999}
 TLS_PORTS = {443, 8443}
 
+# Resolved once at import so startup can log it and every scan takes the same, visible path.
+NMAP_PATH = shutil.which("nmap")
+NMAP_AVAILABLE = NMAP_PATH is not None
+
 def nmap_available() -> bool:
-    return shutil.which("nmap") is not None
+    return NMAP_AVAILABLE
+
+def nmap_status() -> str:
+    return "available" if NMAP_AVAILABLE else "not_installed — using built-in scanner"
 
 def scan_engine() -> str:
     return "nmap" if nmap_available() else "builtin"
@@ -52,7 +59,7 @@ def parse_nmap_xml(xml_text: str) -> list[dict]:
     return hosts
 
 def _run_nmap(target: str, profile: str, timeout: int) -> list[dict]:
-    command = ["nmap", *PROFILES[profile], "-oX", "-", "--host-timeout", f"{min(timeout, 300)}s", target]
+    command = [NMAP_PATH or "nmap", *PROFILES[profile], "-oX", "-", "--host-timeout", f"{min(timeout, 300)}s", target]
     result = subprocess.run(command, capture_output=True, text=True, timeout=timeout + 15, check=False)
     if result.returncode not in (0, 1):
         raise RuntimeError(result.stderr.strip() or "Nmap scan failed.")

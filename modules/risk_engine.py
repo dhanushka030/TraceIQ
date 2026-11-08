@@ -18,9 +18,9 @@ def score_exposure(hosts: list[dict], footprint: dict | None = None, cves: list[
     risky_ports: list[int] = []
     breakdown = {c: 0 for c in CATEGORIES}
 
-    def add(severity, kind, category, title, detail, remediation, points=0):
+    def add(severity, kind, category, title, detail, remediation, points=0, port=None, service=None):
         breakdown[category] += points
-        findings.append({"severity": severity, "type": kind, "category": category, "points": points, "title": title, "detail": detail, "remediation": remediation})
+        findings.append({"severity": severity, "type": kind, "category": category, "points": points, "port": port, "service": service, "title": title, "detail": detail, "remediation": remediation})
 
     for host in hosts:
         for port in host.get("ports", []):
@@ -28,9 +28,9 @@ def score_exposure(hosts: list[dict], footprint: dict | None = None, cves: list[
             if value:
                 risky_ports.append(port.get("port"))
                 service_name = str(port.get("service", "service")).replace("_", " ").title()
-                add("High" if value >= 12 else "Medium", "risky_port", "Exposed services", f"Potentially risky service on port {port.get('port')}", f"{service_name} is reachable on port {port.get('port')}.", "Close the port if unused; restrict it to trusted networks and require strong authentication.", value)
+                add("High" if value >= 12 else "Medium", "risky_port", "Exposed services", f"Potentially risky service on port {port.get('port')}", f"{service_name} is reachable on port {port.get('port')}.", "Close the port if unused; restrict it to trusted networks and require strong authentication.", value, port.get("port"), str(port.get("service") or ""))
             if port.get("product") and port.get("version"):
-                add("Info", "version_disclosure", "Software versions", f"Version identified: {port['product']} {port['version']}", "Service version information was returned by the target.", "Keep the service patched and avoid exposing version banners where possible.")
+                add("Info", "version_disclosure", "Software versions", f"Version identified: {port['product']} {port['version']}", "Service version information was returned by the target.", "Keep the service patched and avoid exposing version banners where possible.", 0, port.get("port"), str(port.get("service") or ""))
 
     matched_products = {str(c.get("matched_product", "")).lower().split()[0] for c in cves or [] if c.get("matched_product")}
     counted_versions = set()
@@ -39,7 +39,7 @@ def score_exposure(hosts: list[dict], footprint: dict | None = None, cves: list[
             product, version = str(port.get("product", "")), str(port.get("version", ""))
             if product and version and any(token in product.lower() for token in matched_products) and (product, version) not in counted_versions:
                 counted_versions.add((product, version))
-                add("Medium", "outdated_version", "Software versions", f"Review detected version: {product} {version}", "A CVE keyword match references this product; confirm whether the detected version is affected before treating it as vulnerable.", "Check the vendor advisory and upgrade or apply the supported mitigation if this version is affected.", weights.get("outdated_version", 12))
+                add("Medium", "outdated_version", "Software versions", f"Review detected version: {product} {version}", "A CVE keyword match references this product; confirm whether the detected version is affected before treating it as vulnerable.", "Check the vendor advisory and upgrade or apply the supported mitigation if this version is affected.", weights.get("outdated_version", 12), port.get("port"), str(port.get("service") or ""))
 
     fp = footprint or {}
     http = fp.get("http", {})
