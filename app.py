@@ -2,12 +2,12 @@
 from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
-import ipaddress, json, logging, threading, time
+import hmac, ipaddress, json, logging, threading, time
 from types import SimpleNamespace
 from flask import Flask, jsonify, render_template, request, send_file, make_response
 from werkzeug.exceptions import HTTPException
 from flask_cors import CORS
-from config import SECRET_KEY, SCAN_TIMEOUT, SCAN_COOLDOWN_SECONDS
+from config import BASIC_AUTH, PUBLIC_MODE, SECRET_KEY, SCAN_TIMEOUT, SCAN_COOLDOWN_SECONDS
 from models.store import create_store
 from modules.validators import validate_target, resolve_addresses, preferred_address
 from modules.scanner import scan_target, nmap_available, nmap_status, scan_engine, NMAP_PATH, NMAP_AVAILABLE
@@ -92,6 +92,14 @@ def _report_response(html, name, fmt):
         return response
     return send_file(BytesIO(pdf), mimetype="application/pdf", as_attachment=True, download_name=f"{name}.pdf")
 
+@app.before_request
+def require_basic_auth():
+    """Optional site-wide password (NETSENTRY_BASIC_AUTH=user:password). /api/health stays open for host health checks."""
+    if not BASIC_AUTH or request.path == "/api/health": return None
+    auth = request.authorization
+    if auth and auth.type == "basic" and hmac.compare_digest(f"{auth.username}:{auth.password}", BASIC_AUTH): return None
+    return make_response("Authentication required.", 401, {"WWW-Authenticate": 'Basic realm="NetSentry TraceIQ"'})
+
 @app.after_request
 def security_headers(response):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -116,7 +124,7 @@ def unexpected_error(exc):
 def index(): return render_template("index.html", nmap_installed=nmap_available(), engine=scan_engine())
 
 @app.get("/api/health")
-def health(): return jsonify({"status": "ok", "engine": scan_engine(), "nmap": nmap_status(), "nmap_path": NMAP_PATH, "database": store.backend})
+def health(): return jsonify({"status": "ok", "engine": scan_engine(), "nmap": nmap_status(), "nmap_path": NMAP_PATH, "database": store.backend, "public_mode": PUBLIC_MODE})
 
 @app.get("/api/demo")
 def demo(): return jsonify({"id": "demo", "target": "scanme.nmap.org", "status": "completed", "profile": "demo", "result": build_demo()})

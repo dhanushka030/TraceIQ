@@ -20,6 +20,10 @@ _load_dotenv(BASE_DIR / ".env")
 
 # Generated per process unless NETSENTRY_SECRET_KEY is set; the app keeps no login sessions.
 SECRET_KEY = os.environ.get("NETSENTRY_SECRET_KEY") or os.urandom(32).hex()
+# Public deployments (Render etc.): refuse loopback/private targets so the server cannot be used to probe its own network.
+PUBLIC_MODE = os.environ.get("NETSENTRY_PUBLIC_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+# Optional "user:password" that protects the whole site (except /api/health) with HTTP Basic auth.
+BASIC_AUTH = os.environ.get("NETSENTRY_BASIC_AUTH", "")
 SCAN_TIMEOUT = 180
 SCAN_COOLDOWN_SECONDS = 10
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"

@@ -1,0 +1,25 @@
+# Render Blueprint: New > Blueprint, pick this repo. Secrets are entered in the dashboard (sync: false).
+services:
+  - type: web
+    name: traceiq
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    # One worker: the scan cooldown and background scan threads live in the process.
+    startCommand: gunicorn app:app --workers 1 --threads 8 --timeout 120 --bind 0.0.0.0:$PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.5
+      - key: NETSENTRY_PUBLIC_MODE
+        value: "1"
+      - key: NETSENTRY_SECRET_KEY
+        generateValue: true
+      - key: NETSENTRY_BASIC_AUTH
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false

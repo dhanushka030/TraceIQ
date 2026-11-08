@@ -104,3 +104,13 @@ def test_scan_result_records_cve_source(client, monkeypatch):
     monkeypatch.setattr(netsentry, "lookup_cves", lambda services, cache=None: ([], "offline_fallback"))
     sid, _ = _run(client)
     assert client.get(f"/api/scan/{sid}/results").json["result"]["cve_source"] == "offline_fallback"
+
+def test_basic_auth_protects_site_but_not_health(client, monkeypatch):
+    import base64
+    monkeypatch.setattr(netsentry, "BASIC_AUTH", "demo:s3cret")
+    assert client.get("/api/health").status_code == 200
+    assert client.get("/").status_code == 401 and "Basic" in client.get("/").headers["WWW-Authenticate"]
+    bad = {"Authorization": "Basic " + base64.b64encode(b"demo:wrong").decode()}
+    good = {"Authorization": "Basic " + base64.b64encode(b"demo:s3cret").decode()}
+    assert client.get("/api/history", headers=bad).status_code == 401
+    assert client.get("/api/history", headers=good).status_code == 200

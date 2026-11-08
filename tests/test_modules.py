@@ -164,3 +164,16 @@ def test_nmap_gets_dash_6_only_for_ipv6(monkeypatch):
     monkeypatch.setattr(scanner.subprocess, "run", lambda cmd, **k: seen.append(cmd) or R())
     scanner._run_nmap("2600:3c01::1", "quick", 30); scanner._run_nmap("45.33.32.156", "quick", 30)
     assert "-6" in seen[0] and "-6" not in seen[1]
+
+# ---- public deployment mode
+def test_public_mode_blocks_private_targets(tmp_path):
+    from modules.validators import is_allowed_target
+    allow = tmp_path / "a.json"; allow.write_text('["example.org", "sneaky.example"]')
+    public = lambda t, res: is_allowed_target(t, allow, res, public_mode=True)
+    assert not public("127.0.0.1", lambda _: ["127.0.0.1"])
+    assert not public("localhost", lambda _: ["127.0.0.1"])
+    assert not public("10.0.0.5", lambda _: ["10.0.0.5"])
+    assert public("scanme.nmap.org", lambda _: ["45.33.32.156"])
+    assert public("example.org", lambda _: ["93.184.216.34"])
+    assert not public("sneaky.example", lambda _: ["10.1.1.1"])      # allowlisted name pointing inside the network
+    assert not public("other.example", lambda _: ["93.184.216.34"])  # not allowlisted

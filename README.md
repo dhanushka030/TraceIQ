@@ -104,6 +104,24 @@ The suite covers target validation, the full API lifecycle, the Nmap code path t
 | GET | `/api/demo`, `/api/demo/report` | Sample data without touching the database |
 | GET | `/api/health` | Status and Nmap availability |
 
+## Deploy on Render
+
+TraceIQ is a Flask server, so create a **Web Service** (not a Static Site).
+
+| Setting | Value |
+|---|---|
+| Language | Python 3 |
+| Build command | `pip install -r requirements.txt` |
+| Start command | `gunicorn app:app --workers 1 --threads 8 --timeout 120 --bind 0.0.0.0:$PORT` |
+| Health check path | `/api/health` |
+
+Environment variables (Render dashboard > Environment): `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` (paste the key with its `
+` characters), `NETSENTRY_PUBLIC_MODE=1`, `NETSENTRY_SECRET_KEY` (any long random string) and optionally `NETSENTRY_BASIC_AUTH=user:password`. Do **not** set `PORT`, `FIREBASE_SERVICE_ACCOUNT_PATH` or `NETSENTRY_DB_BACKEND`. `render.yaml` describes the same setup for **New > Blueprint**.
+
+- **Public mode** limits scans to `scanme.nmap.org` and names in `allowed_targets.json`, and rejects anything that resolves to a private address, so the server cannot probe its own network.
+- Render has no Nmap, so deployed scans use the built-in scanner. PDF export falls back to HTML where the PDF libraries are missing.
+- The free plan sleeps when idle; the first request after a pause takes about a minute.
+
 ## Known limitations
 
 - CVE matches are keyword based; product strings may not map exactly to NVD records. Confirm with vendor advisories.

@@ -6,4 +6,5 @@ requests>=2.31,<3
 firebase-admin>=6.5,<8
 # Optional: PDF via WeasyPrint (needs GTK/Pango). Without it, PDF export uses headless Edge/Chrome, then HTML.
 WeasyPrint>=62,<70
+gunicorn>=22,<24; sys_platform != "win32"
 pytest>=8,<9
